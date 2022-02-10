@@ -2,7 +2,11 @@
 
 """
 This is a mask package for pymongo. It is a drop-in replacement for
-pymongo and it works exactly like pymongowatch.
+pymongo but pymongowatch is enabled by default.
+
+This module has to be placed in sys.path with more priority than the
+real pymongo, so it can be enabled as a mask for it and leverages the
+real pymongo's functionality.
 """
 
 import importlib
@@ -30,15 +34,23 @@ class __PymongoMaskImporter(importlib.machinery.PathFinder):
 # otherwise the next import statement for pymongo will just return the
 # already existing item in the cache which is this module itself not
 # the real pymongo.
-__this_moudle = sys.modules["pymongo"]
-del sys.modules["pymongo"]
+__this_moudle = sys.modules[__name__]
+del sys.modules[__name__]
 
 # Import the real pymongo by leveraging our custom importer.
 __mask_importer = __PymongoMaskImporter()
 sys.meta_path.insert(0, __mask_importer)
 try:
-    # let's store the real pymongo in case someone need it.
+    # let's store the real pymongo in case someone needs it.
     import pymongo as real_pymongo
+
+    try:
+        import pymongo.watcher
+    except ModuleNotFoundError as exp:
+        raise ImportError(
+            "pymongowatch mask is imported but watcher module is not "
+            "importable.") from exp
+
     # import all the stuff from pymongo namespace so this module can
     # be used as a replica of pymongo.
     from pymongo import *
@@ -51,50 +63,7 @@ finally:
 __path__ = real_pymongo.__path__
 
 # Now it's time to get back this module to the python's cache.
-sys.modules["pymongo"] = __this_moudle
+sys.modules[__name__] = __this_moudle
 
-# `watcher` is a module that will provide shortcuts for useful methods
-# from pymongowatch.
-watcher = types.ModuleType("watcher")
-
-
-def __initialize_watchers():
-    """
-    Add shortcuts from pymongowatch to watcher module
-    """
-    global watcher
-
-    import pymongowatch
-    pymongowatch.PatchWatchers()
-
-    for cur_name, name in [
-            ("watch_all_logs", "all_logs"),
-            ("watch_clear_logs", "clear_logs"),
-            ("watch_follow_logs", "follow_logs")]:
-        setattr(watcher, name,
-                getattr(pymongowatch.WatchCursor, cur_name))
-
-    def __set_query_normalizer(func):
-        """
-        Set pymongowatch.WatchCursor.watch_query_normalizer to the provided
-        `func`. The `func` must be a callable with exactly on argument
-        `query` which will be used to generate the {normalized_query}
-        template inside the pymongowatch log.
-        """
-        assert callable(func)
-        pymongowatch.WatchCursor.watch_query_normalizer = staticmethod(func)
-
-    watcher.set_query_normalizer = __set_query_normalizer
-
-
-watcher._initialize_watchers = __initialize_watchers
-
-try:
-    __initialize_watchers()
-except AttributeError:
-    # If pymognowatch imports pymongo while this module (the pymongo
-    # mask) is enabled we my get AttributeError: partially initialized
-    # module 'pymongowatch' has no attribute 'PatchWatchers' (most
-    # likely due to a circular import); to overcome this issue,
-    # pymongowatch has to call `_initialize_watchers` itself.
-    pass
+# Enable watcher module
+real_pymongo.watcher.PatchWatchers()

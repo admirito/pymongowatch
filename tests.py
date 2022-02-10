@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 
+import os
+import sys
 import unittest
 from collections import deque
 from unittest import mock
 
-import pymongowatch
+# import the real pymongo
+import pymongo
+
+# Add our local pymongo.watcher as a sub-package to the real pymongo
+local_pymongo_path = os.path.join(os.path.dirname(__file__), "pymongo")
+sys.path.insert(0, local_pymongo_path)
+pymongo.watcher = __import__("watcher")
 
 
 class TestWatchCursor(unittest.TestCase):
@@ -12,11 +20,11 @@ class TestWatchCursor(unittest.TestCase):
         # We use port=-1 (an invalid value for port number) to make
         # sure we will never connect to a real MongoDB by mistake
         self.test_collection = \
-            pymongowatch.MongoClient(port=-1).test_db.test_collection
+            pymongo.MongoClient(port=-1).test_db.test_collection
 
         self.query = {"value": 10}
 
-        self.test_cursor = pymongowatch.WatchCursor(
+        self.test_cursor = pymongo.watcher.cursor.WatchCursor(
             self.test_collection, filter=self.query)
 
         # clear the logs from the class attribute
@@ -58,12 +66,13 @@ class TestWatchCursor(unittest.TestCase):
     @unittest.mock.patch("pymongo.cursor.Cursor.next")
     def test_all_logs(self, mock_next):
         for i in range(3):
-            cursor = pymongowatch.WatchCursor(
+            cursor = pymongo.watcher.cursor.WatchCursor(
                 self.test_collection, filter=self.query)
             items = [next(cursor) for _ in range(10)]
 
         self.assertEqual(
-            list(pymongowatch.WatchCursor.watch_all_logs(log_format=dict)),
+            list(pymongo.watcher.cursor.WatchCursor.watch_all_logs(
+                log_format=dict)),
             [{"create_time": mock.ANY,
               "last_fetched_time": mock.ANY,
               "query": self.query,
@@ -75,26 +84,26 @@ class TestWatchCursor(unittest.TestCase):
 
     @unittest.mock.patch("pymongo.cursor.Cursor.next")
     @unittest.mock.patch("threading.Condition.wait")
-    @unittest.mock.patch("pymongowatch.deque")
+    @unittest.mock.patch("pymongo.watcher.cursor.deque")
     def test_follow_logs(self, mock_deque, mock_wait, mock_next):
         queue = mock_deque.return_value = deque()
 
         try:
-            pymongowatch.WatchCursor._watch_followers.append(queue)
+            pymongo.watcher.cursor.WatchCursor._watch_followers.append(queue)
 
             for i in range(3):
-                cursor = pymongowatch.WatchCursor(
+                cursor = pymongo.watcher.cursor.WatchCursor(
                     self.test_collection, filter=self.query)
                 items = [next(cursor) for _ in range(10)]
         finally:
             # calling `watch_follow_logs` will add the deque again
             # into the followers list
-            pymongowatch.WatchCursor._watch_followers.pop()
+            pymongo.watcher.cursor.WatchCursor._watch_followers.pop()
 
         mock_wait.side_effect = [True] * 3
 
         # create the generator
-        follower = pymongowatch.WatchCursor.watch_follow_logs(
+        follower = pymongo.watcher.cursor.WatchCursor.watch_follow_logs(
             log_format=dict, wait_time_ms=0)
 
         self.assertEqual(

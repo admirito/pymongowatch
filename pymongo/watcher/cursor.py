@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
 
 """
-A drop-in replacemnt for pymongo: Python driver for MongoDB. It
-uses pymongo as the backend and provide all the pymongo modules and
-classes.
-
-pymongowatch has an extra WatchCursor class that extends
+This module implements WatchCursor class that extends
 pymongo.cursor.Cursor to collect query logs. You can enable this class
 as the result of pymongo.collection operators such as `find` by
 calling the monkey-patching method `PatchWatchers`:
 
-  import pymongowatch
-  pymongowatch.PatchWatchers()
-  client = pymongowatch.MongoClient()
+  PatchWatchers()
+  client = MongoClient()
   list(client.dbname.coll.find({"a": 1}))
   list(client.dbname.coll.find({"a": 2}))
-  print(pymongowatch.WatchCursor.watch_all_logs())
+  print(WatchCursor.watch_all_logs())
 """
 
 import json
@@ -25,17 +20,6 @@ from collections import deque
 from datetime import datetime
 
 import pymongo
-
-# add all the objects from pymongo so they are importable from
-# pymongowatch, too
-from pymongo import *
-
-# Convert pymongowatch module to a package (every module with __path__
-# attribute in python is practically a package). Here, pymongowatch
-# will have all the pymongo sub-modules as its own sub-modules.
-__path__ = pymongo.__path__
-
-__version__ = "0.1.0"
 
 
 class WatchCursor(pymongo.cursor.Cursor):
@@ -302,13 +286,3 @@ def PatchWatchers():
     """
     pymongo.cursor.Cursor = WatchCursor
     pymongo.collection.Cursor = WatchCursor
-
-
-try:
-    # If pymongo mask is enabled, but pymongowatch is imported, the
-    # mask cannot import pymongowatch and enable the `watcher`
-    # module. So pymongowatch has to initialize it, itself.
-    pymongo.watcher._initialize_watchers()
-except Exception:
-    # Exception may occuer if pymongo mask is not enbaled
-    pass
