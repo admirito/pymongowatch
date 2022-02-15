@@ -9,11 +9,19 @@ real pymongo, so it can be enabled as a mask for it and leverages the
 real pymongo's functionality.
 """
 
-import importlib
 import importlib.machinery
+import logging.config
 import os
+import pathlib
 import sys
-import types
+import warnings
+
+try:
+    import yaml
+except ModuleNotFoundError:
+    # pyyaml is not installed; but we can go on without loading yaml
+    # configuration
+    pass
 
 
 class __PymongoMaskImporter(importlib.machinery.PathFinder):
@@ -54,6 +62,7 @@ try:
     # import all the stuff from pymongo namespace so this module can
     # be used as a replica of pymongo.
     from pymongo import *
+    from pymongo import __version__
 finally:
     sys.meta_path.remove(__mask_importer)
 
@@ -65,5 +74,30 @@ __path__ = real_pymongo.__path__
 # Now it's time to get back this module to the python's cache.
 sys.modules[__name__] = __this_moudle
 
-# Enable watcher module
-real_pymongo.watcher.PatchWatchers()
+# Enable watcher module patches.
+real_pymongo.watcher.patch_pymongo()
+
+# Loading pymongowatch logging yaml configurations from the lowest
+# priority to the highest, so the incremental configuration
+# [https://docs.python.org/3/library/logging.config.html#incremental-configuration]
+# can be used.
+for config_path in [
+        "/etc/pymongowatch.yaml",
+        "/etc/pymongowatch/pymongowatch.yaml",
+        os.path.join(pathlib.Path.home(), ".pymongowatch.yaml")]:
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path) as fp:
+                config_dict = yaml.load(fp, Loader=yaml.CLoader)
+
+            logging.config.dictConfig(config_dict)
+        except Exception as exp:
+            warnings.warn(f"Cannot load {config_path}: {exp}")
+            import traceback
+            traceback.print_exc()
+
+if not logging.getLogger("pymongo.watcher").handlers:
+    warnings.warn(
+        "No handler is configured for pymongo.watcher in the configuration "
+        "file. The deafult handler will be used.")
+    real_pymongo.watcher.add_logging_handlers()

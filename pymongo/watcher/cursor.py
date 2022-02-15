@@ -4,181 +4,101 @@
 This module implements WatchCursor class that extends
 pymongo.cursor.Cursor to collect query logs. You can enable this class
 as the result of pymongo.collection operators such as `find` by
-calling the monkey-patching method `PatchWatchers`:
+calling the monkey-patching method `watch_patch_pymongo`:
 
-  PatchWatchers()
+  WatchCursor.watch_patch_pymongo()
+
+  logger = logging.getLogger("pymongo.watcher.cursor")
+  # Add logger handlers as you like; although it is recommended to use
+  # logging.handlers.QueueHandler with a
+  # pymongo.watcher.logger.WatchQueue and a custom logging.Formatter
+  # e.g. logging.Formatter("{asctime} {name} - {watch}", style="{")
+
   client = MongoClient()
-  list(client.dbname.coll.find({"a": 1}))
-  list(client.dbname.coll.find({"a": 2}))
-  print(WatchCursor.watch_all_logs())
+  list(client.dbname.coll.find({"foo": 1}))
+  list(client.dbname.coll.find({"bar": 2}))
 """
 
-import json
-import threading
 import time
-from collections import deque
 from datetime import datetime
 
 import pymongo
 
+from .base import BaseWatcher
+from .logger import WatchMessage, log
 
-class WatchCursor(pymongo.cursor.Cursor):
+
+class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
     """
     A cursor / iterator over Mongo query results just like
     pymongo.cursor.Cusrsor class but it can also collect logs for
     applied queries.
     """
 
-    # a deque to store logs
-    _watch_all_logs = deque(maxlen=10000)
+    # TODO
+    _watch_default_fields = (
+        "CreateTime", "DB", "Collection", "Query", "RetrieveTime",
+        "RetrievedCount")
 
-    # a list of deques for each log follower; each item in each deque
-    # is a tuple; the cursor create time and the log
-    _watch_followers = []
+    # TODO
+    _watch_default_delay_sec = 600
 
-    # A threading condition object to synchronize log generators and
-    # log followers
-    _watch_new_log_condition = threading.Condition()
-
-    # The default log format template
-    watch_log_format = (
-        "{create_time.strftime('%Y %b %d %X.%f')[:-3]} - "
-        "Collection={json.dumps(collection)} "
-        "Query={json.dumps(normalized_query)} "
-        "FetchTime={fetch_time:.6f} "
-        "TriedFetchedCount={tried_fetched_count} "
-        "FetchedCount={fetched_count}")
-
-    def __init__(self, *args, **kwargs):
+    def rewind(self):
         """
-        Accepts the same arguments as pymongo.cursor.Cusrsor with extra
-        kwargs.
-
-        `log_format` is a :calss:`str` which determines the format of
-        the logs (in python f-string format) and could contain the
-        following templates:
-        - {create_time}          :class:`datetime.datetime`
-        - {last_fetched_time}    :class:`datetime.datetime`
-        - {query}                :class:`dict`
-        - {normalized_query}     :class:`dict`
-        - {collection}           :class:`str`
-        - {fetched_count}        :class:`int`
-        - {tried_fetched_count}  :class:`int`
-        - {fetch_time}           :class:`float`
-
-        The `log_format` if evaluated with literal f-strings. So it
-        can also have function calls. For example:
-
-        log_format = ("{create_time.strftime('%Y %b %d %X.%f')[:-3]} - "
-                      "Query={json.dumps(query)")
-
-        The generated log could be retrieved by the class method
-        `watch_follow_logs`.
-
-        If `enable_all_logs` is True, the log will be also stored in
-        the internal `_watch_all_logs` deque (with the default
-        maxlen=10000) and can be retrieved by `watch_all_logs`
-        method. If you are only using `watch_follow_logs` method,
-        setting `enable_all_logs` to False has performance advantages.
-
-        :Parameters: 
-         - `log_format`: the default template for each log.
-         - `enable_all_logs`: enable/disable registering in `all_logs`.
+        Call rewind on the origianl pymongo's Cursor to rewind this cursor
+        to its unevaluated state.
         """
-        self._watch_create_time = datetime.now()
-        self._watch_last_fetched_time = None
-
-        watch_log_format = kwargs.pop("watch_log_format", None)
-        if watch_log_format:
-            # override the class default
-            self.watch_log_format = watch_log_format
-
-        self._watch_enable_all_logs = kwargs.pop("enable_all_logs", True)
-
-        super().__init__(*args, **kwargs)
-
-        self._watch_query = self._Cursor__spec
-        self._watch_tried_count = 0
-        self._watch_fetched_count = 0
-        self._watch_fetch_time = 0
-
-        # `__watch_log` will be stored in `_watch_all_logs` for later
-        # retrieval by `watch_all_logs` method. We have to use a
-        # mutable object (such as a dict, instead of a string) to
-        # store logs in `_watch_all_logs`, so we can update it later
-        # in database fetch time
-        self.__watch_log = self.watch_log_dict()
-
-        if self._watch_enable_all_logs:
-            self._watch_all_logs.append(self.__watch_log)
-
-        for follower in self._watch_followers:
-            with self._watch_new_log_condition:
-                follower.append(self.__watch_log)
-                self._watch_new_log_condition.notify_all()
+        super().rewind()
+        del self._watch_log
 
     def next(self):
-        """Advance the cursor."""
+        """
+        Call next on the origianl pymongo's Cursor to advance the cursor.
+        """
+        first_time = False
+
+        if not hasattr(self, "_watch_log"):
+            self._watch_log = WatchMessage.make(
+                {"CreateTime": datetime.now(),
+                 "LastRetrievedTime": None,
+                 "OriginalQuery": self._Cursor__spec,
+                 "Query": self.watch_query_normalizer(self._Cursor__spec),
+                 "DB": self.collection.database.name,
+                 "Collection": self.collection.name,
+                 "RetrieveTime": 0,
+                 "RetrievedCount": 0},
+                default_keys=self._watch_default_fields,
+                ready=False,
+                delay_sec=self._watch_default_delay_sec)
+            first_time = True
+
+        self._watch_log["LastRetrievedTime"] = datetime.now()
+
+        _start = time.time()
         try:
-            self._watch_last_fetched_time = datetime.now()
-            self._watch_tried_count += 1
-
-            _start = time.time()
-            try:
-                result = super().next()
-            finally:
-                _end = time.time()
-                self._watch_fetch_time += _end - _start
-
-            # if no exception occurs above
-            self._watch_fetched_count += 1
-            return result
+            result = super().next()
         finally:
-            if self._watch_enable_all_logs:
-                self.__watch_log.update(self.watch_log_dict())
+            _end = time.time()
+            self._watch_log["RetrieveTime"] += _end - _start
+            self._watch_log["RetrievedCount"] = self.retrieved
+            if first_time:
+                log(__name__, self._watch_log)
+
+        return result
 
     __next__ = next
 
-    @staticmethod
-    def __format_dict(fmt, dic):
+    def close(self):
         """
-        Render `fmt` a :class:str like PEP 498 f-string literals with the
-        defined variables in dic a :class:`dict` with string keys.
+        Call close on the origianl pymongo's Cursor to explicitly close /
+        kill this cursor.
         """
-        exec_locals = {"dic": dic}
-        variables = "\n".join(f"{key} = dic[{key!r}]" for key in dic.keys())
-        exec(f"{variables}\nresult = f'''{fmt}'''", None, exec_locals)
-        return exec_locals["result"]
+        super().close()
 
-
-    def watch_log_dict(self):
-        """
-        Returns the log generated by WatchCursor as :class:`dict` for the
-        cursor.
-        """
-        return {
-            "create_time": self._watch_create_time,
-            "last_fetched_time": self._watch_last_fetched_time,
-            "query": self._watch_query,
-            "normalized_query": self.watch_query_normalizer(self._watch_query),
-            "collection": self.collection.name,
-            "fetched_count": self._watch_fetched_count,
-            "tried_fetched_count": self._watch_tried_count,
-            "fetch_time": self._watch_fetch_time,
-        }
-
-    def watch_log(self, log_format=None):
-        """
-        Returns the log generated by WatchCursor as :class:`str` for the
-        cursor.
-
-        :Parameters:
-         - `log_format: the :class:`str` template for the log.
-        """
-        log_format = (self.watch_log_format if log_format is None
-                      else log_format)
-
-        return self.__format_dict(log_format, self.watch_log_dict())
+        try:
+            self._watch_log.set_ready()
+        except Exception:
+            pass
 
     def watch_query_normalizer(self, query):
         """
@@ -190,99 +110,26 @@ class WatchCursor(pymongo.cursor.Cursor):
         return query
 
     @classmethod
-    def watch_all_logs(cls, log_format=None):
+    def watch_patch_pymongo(cls):
         """
-        Returns a generator of all the logs generated by WatchCursor
-        class.
-
-        You can pass either a string template to get string logs or
-        the type `dict` for `log_format` to get dictionary logs.
-
-        :Parameters:
-         - `log_format`: the format of the log.
+        Monkey patch pymongo methods to use WatchCursor
         """
-        log_format = (cls.watch_log_format if log_format is None
-                      else log_format)
+        super().watch_patch_pymongo()
 
-        for log_dict in cls._watch_all_logs:
-            if log_format is dict:
-                yield log_dict
-            else:
-                yield cls.__format_dict(log_format, log_dict)
+        cls.__real_pymongo_cursor = pymongo.cursor.Cursor
+
+        pymongo.cursor.Cursor = WatchCursor
+        pymongo.collection.Cursor = WatchCursor
 
     @classmethod
-    def watch_clear_logs(cls):
+    def watch_unpatch_pymongo(cls):
         """
-        Clears all the stored logs in the WatchCursor class.
+        Undo pymongo monkey patching and use the pymongo's original Cursor
         """
-        cls._watch_all_logs.clear()
+        super().watch_unpatch_pymongo()
 
-    @classmethod
-    def watch_follow_logs(cls, log_format=None, wait_time_ms=600000):
-        """
-        Follow logs as they arrive and yiled them as a generator. This
-        method wait `wait_time_ms` milliseconds before generating each
-        log to make sure the log is up-to-date with latest fetching
-        times.
-
-        You can pass either a string template to get string logs or
-        the type `dict` for `log_format` to get dictionary logs.
-
-        :Parameters:
-         - `log_format`: the format of the log.
-         - `wait_time_ms: waiting time for each log in milliseconds.
-
-        """
-        log_format = (cls.watch_log_format if log_format is None
-                      else log_format)
-
-        logs_queue = deque()
-        cls._watch_followers.append(logs_queue)
-
-        next_log_will_be_available_at = datetime.now()
-
-        def fetch_available_logs():
-            result = []
-            now = datetime.now()
-            while logs_queue:
-                log_dict = logs_queue.popleft()
-                if ((now - log_dict["create_time"]).total_seconds() * 1000
-                    > wait_time_ms):
-                    result.append(log_dict)
-                else:
-                    # put backed the fetched item! it's not ready yet.
-                    logs_queue.appendleft(log_dict)
-                    break
-            return result
-
-        while True:
-            with cls._watch_new_log_condition:
-                logs = fetch_available_logs()
-                while not logs:
-                    # there are two conditions that a log may be
-                    # available; when the log generator notifies the
-                    # cls._watch_new_log_condition and when
-                    # wait_time_ms milliseconds has passed since the
-                    # earliest log in the deque (i.e. the first log in
-                    # logs_queue)
-                    timeout = \
-                        max(0, wait_time_ms / 1000.0 -
-                            (datetime.now() -
-                             logs_queue[0]["create_time"]).total_seconds()) \
-                             if logs_queue else None
-                    cls._watch_new_log_condition.wait(timeout)
-                    logs = fetch_available_logs()
-
-            for log_dict in logs:
-                if log_format is dict:
-                    yield log_dict
-                else:
-                    yield cls.__format_dict(log_format, log_dict)
-
-
-def PatchWatchers():
-    """
-    Monkey patch pymongo methods to use pymongowatch cursors
-    """
-    pymongo.cursor.Cursor = WatchCursor
-    pymongo.collection.Cursor = WatchCursor
+        try:
+            pymongo.cursor.Cursor = cls.__real_pymongo_cursor
+            pymongo.collection.Cursor = cls.__real_pymongo_cursor
+        except AttributeError:
+            pass

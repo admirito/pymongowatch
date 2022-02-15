@@ -1,0 +1,22 @@
+# config file for pymongowatch
+
+version: 1
+
+formatters:
+  default_formatter:
+    format: "{asctime} {name} - {watch}"
+    style: "{"
+
+handlers:
+  console_queue_handler:
+    (): ext://pymongo.watcher.setup_queue_handler
+    backend: cfg://handlers.console
+  console:
+    class: logging.StreamHandler
+    formatter: default_formatter
+
+loggers:
+  pymongo.watcher:
+    level: INFO
+    handlers:
+      - console_queue_handler
