@@ -1,11 +1,34 @@
-# config file for pymongowatch
+# Configuration for pymongowatch
+#
+# The configuration must be compatible with the python logging
+# dictConfig schema; described in here:
+# https://docs.python.org/3/library/logging.config.html#dictionary-schema-details
 
 version: 1
 
 formatters:
-  default_formatter:
-    format: "{asctime} {name} - {watch}"
+  normal:
+    format: "{watch}"
     style: "{"
+  full:
+    format: "{asctime} {name} - {watch.full}"
+    style: "{"
+
+filters:
+  slow:
+    (): ext://pymongo.watcher.filters.ExpressionFilter
+    expression: |
+      Collection == "pywatch" and RetrieveTime > 0.00001
+  mask:
+    (): ext://pymongo.watcher.filters.ExecuteFilter
+    execute: |
+      import numbers as _numbers
+      _mask = (lambda d:
+          {k: _mask(v) for k, v in d.items()} if isinstance(d, dict) else
+          [_mask(i) for i in d] if isinstance(d, list) else
+          "x" * len(d) if isinstance(d, str) else
+          0 if isinstance(d, _numbers.Number) else None)
+      Query = _mask(Query)
 
 handlers:
   console_queue_handler:
@@ -13,10 +36,25 @@ handlers:
     backend: cfg://handlers.console
   console:
     class: logging.StreamHandler
-    formatter: default_formatter
+    formatter: normal
+    filters:
+      - slow
+
+  file_queue_handler:
+    (): ext://pymongo.watcher.setup_queue_handler
+    backend: cfg://handlers.file
+  file:
+    class: logging.handlers.RotatingFileHandler
+    formatter: full
+    maxBytes: 104857600
+    backupCount: 2
+    filename: /tmp/watch.log
+    filters:
+      - mask
 
 loggers:
   pymongo.watcher:
     level: INFO
     handlers:
       - console_queue_handler
+      - file_queue_handler

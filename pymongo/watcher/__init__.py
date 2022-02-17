@@ -9,17 +9,6 @@ from .logger import WatchQueue
 __version__ = "0.1.0"
 
 
-def set_query_normalizer(func):
-    """
-    Set WatchCursor.watch_query_normalizer to the provided `func`. The
-    `func` must be a callable with exactly on argument `query` which
-    will be used to generate the {Query} template inside the
-    watcher log.
-    """
-    assert callable(func)
-    WatchCursor.watch_query_normalizer = staticmethod(func)
-
-
 def patch_pymongo():
     """
     Monkey patch pymongo methods to use pymongowatch logging system

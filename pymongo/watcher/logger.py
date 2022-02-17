@@ -72,6 +72,14 @@ class WatchMessage(dict):
             f"{self.prepare_value(self.get(key))}"
             for key in keys)
 
+    @property
+    def full(self):
+        return self.default_delimiter.join(
+            f"{key}{self.default_key_value_separator}"
+            f"{self.prepare_value(value)}"
+            for key, value in self.items()
+            if not key.startswith("_"))
+
     def __hash__(self):
         return id(self)
 

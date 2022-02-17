@@ -61,8 +61,7 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
             self._watch_log = WatchMessage.make(
                 {"CreateTime": datetime.now(),
                  "LastRetrievedTime": None,
-                 "OriginalQuery": self._Cursor__spec,
-                 "Query": self.watch_query_normalizer(self._Cursor__spec),
+                 "Query": self._Cursor__spec,
                  "DB": self.collection.database.name,
                  "Collection": self.collection.name,
                  "RetrieveTime": 0,
@@ -99,15 +98,6 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
             self._watch_log.set_ready()
         except Exception:
             pass
-
-    def watch_query_normalizer(self, query):
-        """
-        This method returns `query` argument intact. You can override it
-        and return any transformed query instead to set
-        {normalized_query} log template. For example you can mask user
-        data that is not appropriate for collection.
-        """
-        return query
 
     @classmethod
     def watch_patch_pymongo(cls):
