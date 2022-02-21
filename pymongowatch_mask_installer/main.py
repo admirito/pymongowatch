@@ -213,17 +213,38 @@ def menu_options():
              "pymongo as the backend to exactly replicate the pymongo but it "
              "also enable pymongowatch by default.\n\nYour options:\n"]
 
-    for i, install_path in enumerate(get_available_install_paths()):
+    for i, install_path in enumerate(get_available_install_paths() +
+                                     [os.path.curdir]):
+        install_path_name = (
+            f"current directory ({os.path.realpath(install_path)})"
+            if install_path == os.path.curdir else install_path)
+
         opt = i + 1
         if os.access(install_path, os.W_OK):
-            text += [f"{opt}) Install at {install_path}\n"]
+            text += [f"{opt}) Install at {install_path_name}\n"]
             options[opt] = ((lambda path: lambda: 0 if install(path) else 1)
                             (install_path))
         else:
-            text += [f"{opt}) [requires sudo] Install at {install_path}\n"]
+            text += [
+                f"{opt}) [requires sudo] Install at {install_path_name}\n"]
             options[opt] = (
                 (lambda path: lambda: run_self_with_sudo("--install", path))
                 (install_path))
+
+    def custom_install():
+        install_path = input("Enter a path to install pymongo mask: ")
+        if os.path.isdir(install_path):
+            if os.access(install_path, os.W_OK):
+                install(install_path)
+            else:
+                run_self_with_sudo("--install", install_path)
+        else:
+            sys.stderr.write(f"{install_path} is not a directory.\n")
+            exit(1)
+
+    opt += 1
+    text += f"{opt}) Install at a custom path\n"
+    options[opt] = custom_install
 
     return "".join(text), options
 
