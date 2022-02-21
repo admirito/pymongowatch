@@ -8,6 +8,8 @@ inherited from.
 
 class BaseWatcher:
     """
+    The shared code between all the watcher classes will be maintained
+    here.
     """
 
     @classmethod

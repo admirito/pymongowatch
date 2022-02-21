@@ -35,12 +35,12 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
     applied queries.
     """
 
-    # TODO
+    # The `default_keys` for WatchMessage
     _watch_default_fields = (
         "CreateTime", "DB", "Collection", "Query", "RetrieveTime",
         "RetrievedCount")
 
-    # TODO
+    # The default timeout in seconds for WatchMessage `timeout_on`
     _watch_default_delay_sec = 600
 
     def rewind(self):
