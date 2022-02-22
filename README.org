@@ -31,13 +31,15 @@ without any modifications to existing applications.
 
 ** Quick Setup
 
-First you have to install =pymongowatch=. It is available at [[https://pypi.org/][Python
+First you have to install =pymongowatch=. It is available at [[https://pypi.org/project/pymongowatch/][Python
 Package Index (PyPI)]] and can be installed with [[https://pip.pypa.io/en/stable/][pip]]. At a [[https://docs.python.org/3/tutorial/venv.html][virtual
 environment]] or system-wide:
 
 #+begin_src shell
 pip install pymongowatch
 #+end_src
+
+[[https://github.com/admirito/pymongowatch#other-installation-options][Other installation options]] such as Debian packages are available, too.
 
 After basic installation, =pymongo.watcher= sub-package will be
 available and you have two options to go on:
@@ -81,7 +83,7 @@ even =pymongo= library itself.
 
 Furthermore, the pymongo mask will apply the configuration at
 =etc/pymongowatch.yaml= with [[https://docs.python.org/3/library/logging.config.html#logging.config.dictConfig][logging.config.dictConfig]] to the loggers
-of the watchers. A sample =etc/pymongowatch.yaml= is included in the
+of the watchers. A sample [[https://github.com/admirito/pymongowatch/blob/master/etc/pymongowatch.yaml][etc/pymongowatch.yaml]] is included in the
 =pymongowatch= package but you can modify it as needed. The [[https://en.wikipedia.org/wiki/YAML][yaml]]
 configuration follows the [[https://docs.python.org/3/library/logging.config.html#dictionary-schema-details][logging dictionary schema]].
 
@@ -220,7 +222,7 @@ def remove_private_data(data):
 class UserPrivacyFilter(logging.Filter):
     def filter(self, record):
         watch = getattr(record, "watch", {})
-        watch = remove_private_data(watch)
+        watch.update(remove_private_data(watch))
         return True
 #+end_src
 
@@ -333,13 +335,35 @@ cursors more intelligently and you can usually see the =cursor= logs
 very fast without any need to a explicit timeout whereas any =3=
 series usually an explicit timeout is required.
 
-** Debian Packages
+** Other Installation Options
+
+*** Debian Packages
 
 If you are a [[https://www.debian.org/][Debian]]-based GNU/Linux distribution user you are in luck!
-There is a Debian package maintained in the [[https://github.com/admirito/pymongowatch/tree/master][project's debian branch]]
+There is a Debian package maintained in the [[https://github.com/admirito/pymongowatch/tree/debian][project's debian branch]]
 that can make your installation even easier.
 
+You can find the binary packages at [[https://launchpad.net/~mrazavi/+archive/ubuntu/pymongowatch][mrazavi's pymongowatch PPA]] and to
+install it on Ubuntu:
+
+#+begin_src shell
+sudo add-apt-repository ppa:mrazavi/pymongowatch
+sudo apt update
+
+sudo apt install python3-pymongowatch
+#+end_src
+
 ** TODOs
+
+If you see an ugly TODO list below with oversize items, it's not even
+clear which items are DONE and which ones are still TODO, maybe that
+is because this document is written in [[https://orgmode.org/][org-mode]] but you are seeing a
+bad render e.g. in [[https://github.com/github/markup/blob/master/README.md#markups][GitHub]] or a converted reStructuredText format
+e.g. because [[https://packaging.python.org/en/latest/guides/making-a-pypi-friendly-readme/][the lack of org-mode support in PyPI]].
+
+That doesn't make org-mode less lovable or inferior. Anyway [[https://karl-voit.at/2017/09/23/orgmode-as-markup-only/][org-mode
+is one of the most reasonable markup languages to use for text]]. Why
+not to use it and brag about it?
 
 *** DONE Support queries with find
 *** TODO Support for collection delete
