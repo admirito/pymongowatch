@@ -1,0 +1,25 @@
+Template: pymongowatch/mask_install_path
+Type: select
+_Choices: ${choices} custom, none
+_Default: none
+_Description: Install path for pymongo mask:
+ Pymongowatch is always accessible in a python application by
+ importing pymongo.watcher sub-package. But sometimes you are not the
+ author of a python program source code and you still want to use
+ pymongowatch logging capabilities. In this case you can install
+ "pymongo mask" to achieve this ability.
+ .
+ Pymongo mask, is a fake pymongo module which has to be installed on a
+ higher priority sys.path than the real pymongo. It will use the real
+ package as the backend and provide all the features as the real
+ pymongo but it will enable pymongowatch by default. So applications
+ unaware of pymognowatch can leverage its logging mechanism.
+ .
+ Choose a path for pymongo mask installation, "custom" for entering an
+ arbitrary path or "none" to skip installation of pymongo mask.
+
+Template: pymongowatch/custom_mask_install_path
+Type: string
+_Description: Custom install path for pymongo mask:
+ Enter an arbitrary path for pymongo mask installation. A symlink to
+ the pymongo.py (the mask) will be installed at the entered directory.
