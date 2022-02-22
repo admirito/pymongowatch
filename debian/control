@@ -1,0 +1,20 @@
+Source: pymongowatch
+Section: python
+Priority: optional
+Maintainer: Mohammad Razavi <mrazavi64@gmail.com>
+Build-Depends: debhelper-compat (= 12), dh-python, python3-setuptools, python3-all, python3-pymongo
+Standards-Version: 4.4.1
+Homepage: https://github.com/admirito/pymongowatch
+Vcs-Browser: https://github.com/admirito/pymongowatch
+Vcs-Git: https://github.com/admirito/pymongowatch.git
+#Testsuite: autopkgtest-pkg-python
+
+Package: python3-pymongowatch
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}, po-debconf
+Description: Extra logging features for pymongo
+ A python package with logging features for pymongo: Python driver for
+ MongoDB. It will be added as a new sub-package named "watcher" to
+ pymongo which adds options for logging queries.
+ .
+ This package installs the library for Python 3.
