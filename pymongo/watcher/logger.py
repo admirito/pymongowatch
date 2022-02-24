@@ -15,7 +15,9 @@ syntactic sugar for the emitter instance :meth:`log` method.
    "logger" seems more appropriate.
 """
 
+import csv
 import heapq
+import io
 import json
 import logging
 import queue
@@ -23,6 +25,19 @@ import threading
 import time
 from datetime import datetime
 from functools import partial
+
+
+def _repr(s):
+    """
+    Returns repr(s) but always use single-quotes
+
+    Using single-quotes has the advantage that when combined with json
+    strings (which only use double-quotes) less escaping is required.
+    """
+    # repr will use double-quotes if the sring contains single-quotes
+    # but no double-quotes; so if we add a double-quote to the string
+    # we can be sure repr will use single-quotes
+    return "'" + repr(f'"{s}')[2:]
 
 
 class WatchMessage(dict):
@@ -82,23 +97,39 @@ class WatchMessage(dict):
         pass
 
     @staticmethod
-    def prepare_value(value):
+    def prepare_value(value, application="simple"):
         """
         An static method which will be called by all the string serializes
         of the class to serializes the dictionary values.
 
         :Parameters:
          - `value`: the input value for serialization
+         - `application` (optional): for which application the value
+           should be prepared e.g. simple, full or csv
         """
         if isinstance(value, datetime):
-            value = value.strftime('%Y-%m-%d %X,%f')[:-3]
-        elif isinstance(value, float):
+            if application == "csv":
+                return value.strftime("%Y-%m-%d %X.%f")
+            else:
+                return f"'{value.strftime('%Y-%m-%d %X,%f')[:-3]}'"
+        elif isinstance(value, float) and application == "simple":
             return f"{value:.3f}"
+        elif isinstance(value, (list, dict)):
+            try:
+                value = json.dumps(value)
+            except Exception:
+                value = str(value)
 
-        try:
+            if application == "full":
+                return _repr(value)
+            else:
+                return value
+        elif isinstance(value, str) and application != "csv":
+            return _repr(value)
+        elif isinstance(value, bool):
             return json.dumps(value)
-        except Exception:
-            return str(value)
+
+        return str(value)
 
     @classmethod
     def make(cls, message_dict, ready=False, delay_sec=None, **kwargs):
@@ -138,9 +169,35 @@ class WatchMessage(dict):
         """
         return self.default_delimiter.join(
             f"{key}{self.default_key_value_separator}"
-            f"{self.prepare_value(value)}"
+            f"{self.prepare_value(value, application='full')}"
             for key, value in self.items()
             if not key.startswith("_"))
+
+    @property
+    def csv(self):
+        """
+        A CSV (RFC-4180) serializer for the class values.
+
+        First all the columns according to :meth:`csv_columns` method
+        will be returned, then the remaining values.
+        """
+        csv_columns = self.csv_columns()
+        result = io.StringIO()
+        writer = csv.writer(result, dialect="unix", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(
+            [self.prepare_value(self.get(col, ""), application="csv")
+             for col in csv_columns] +
+            [self.prepare_value(value, application="csv")
+             for key, value in self.items() if key not in csv_columns])
+        return result.getvalue().rstrip("\n")
+
+    @classmethod
+    def csv_columns(cls):
+        """
+        Returns a list of column names that :meth:`csv` property will use
+        """
+        from .cursor import WatchCursor
+        return WatchCursor.watch_all_fields
 
     def __str__(self):
         keys = self.keys() if self.default_keys is None else self.default_keys

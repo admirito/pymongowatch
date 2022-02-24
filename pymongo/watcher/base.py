@@ -10,7 +10,13 @@ class BaseWatcher:
     """
     The shared code between all the watcher classes will be maintained
     here.
+
+    :Attributes:
+     - `watch_default_fields`: The `default_keys` for WatchMessage
+     - `watch_all_fields`: List of all the possible log fields
     """
+    watch_default_fields = ()
+    watch_all_fields = ()
 
     @classmethod
     def watch_patch_pymongo(cls):

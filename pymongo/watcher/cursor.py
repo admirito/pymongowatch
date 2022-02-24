@@ -35,10 +35,13 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
     applied queries.
     """
 
-    # The `default_keys` for WatchMessage
-    _watch_default_fields = (
+    watch_default_fields = (
         "CreateTime", "DB", "Collection", "Query", "RetrieveTime",
         "RetrievedCount")
+
+    watch_all_fields = (
+        "CreateTime", "LastRetrievedTime", "DB", "Collection", "Query",
+        "RetrieveTime", "RetrievedCount")
 
     # The default timeout in seconds for WatchMessage `timeout_on`
     _watch_default_delay_sec = 600
@@ -61,12 +64,12 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
             self._watch_log = WatchMessage.make(
                 {"CreateTime": datetime.now(),
                  "LastRetrievedTime": None,
-                 "Query": self._Cursor__spec,
                  "DB": self.collection.database.name,
                  "Collection": self.collection.name,
+                 "Query": self._Cursor__spec,
                  "RetrieveTime": 0,
                  "RetrievedCount": 0},
-                default_keys=self._watch_default_fields,
+                default_keys=self.watch_default_fields,
                 ready=False,
                 delay_sec=self._watch_default_delay_sec)
             first_time = True

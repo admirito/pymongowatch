@@ -165,13 +165,13 @@ watcher.add_logging_handlers(
     formatter="{asctime} {name}.{watch.Collection} - {watch.Query} fetched "
               "{watch.RetrievedCount} in {watch.RetrieveTime} seconds")
 
-# Add a more handler to log the full information for cursors
-cursor_full_handler = logging.FileHanlder(
-    "/tmp/watcher-cursor-full.log")
+# Add another handler to log the full information for cursors in csv
+cursor_csv_handler = logging.FileHanlder(
+    "/tmp/watcher-cursor-csv.log")
 watcher.add_logging_handlers(
-    cursor_full_handler,
+    cursor_csv_handler,
     logger_name="pymongo.watcher.cursor",
-    formatter="{asctime} {name} - {watch.full}")
+    formatter="{asctime},{name},{watch.csv}")
 #+end_src
 
 Note that using =add_logging_handlers= has not only the advantage of

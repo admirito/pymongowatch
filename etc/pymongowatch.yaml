@@ -13,6 +13,9 @@ formatters:
   full:
     format: "{asctime} {name} - {watch.full}"
     style: "{"
+  csv:
+    format: "{asctime},{name},{watch.csv}"
+    style: "{"
 
 filters:
   slow:
@@ -45,7 +48,7 @@ handlers:
     backend: cfg://handlers.file
   file:
     class: logging.handlers.RotatingFileHandler
-    formatter: full
+    formatter: csv
     maxBytes: 104857600
     backupCount: 2
     filename: /tmp/watch.log
