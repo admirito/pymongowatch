@@ -52,7 +52,10 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
         to its unevaluated state.
         """
         super().rewind()
-        del self._watch_log
+        try:
+            del self._watch_log
+        except AttributeError:
+            pass
 
     def next(self):
         """
