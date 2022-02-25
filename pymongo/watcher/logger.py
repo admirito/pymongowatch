@@ -556,4 +556,4 @@ def log(logger_name, msg, *, level=None):
     :class:`pymongo.watcher.logger.WatchLogEmitter` singleton instance
     :meth:`log` method with exactly the same arguments.
     """
-    getLogEmitter().log(logger_name, msg, level=None)
+    getLogEmitter().log(logger_name, msg, level=level)
