@@ -41,7 +41,7 @@ import logging.handlers
 from .cursor import WatchCursor
 from .logger import WatchQueue
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def patch_pymongo():

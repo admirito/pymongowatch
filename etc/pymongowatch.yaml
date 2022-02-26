@@ -37,6 +37,7 @@ handlers:
   console_queue_handler:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.console
+    enable_multiprocessing: true
   console:
     class: logging.StreamHandler
     formatter: normal
@@ -46,6 +47,7 @@ handlers:
   file_queue_handler:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.file
+    enable_multiprocessing: true
   file:
     class: logging.handlers.RotatingFileHandler
     formatter: csv

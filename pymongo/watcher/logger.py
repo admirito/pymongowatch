@@ -5,7 +5,7 @@ This module implements the required classes to emit logs in the
 watchers.
 
 All the :mod:`pymongo.watcher` modules use a singleton instance of
-:class:`WatchLogEmitter` class returned by :func:`getLogEmitter` to
+:class:`WatchLogEmitter` class returned by :func:`get_log_emitter` to
 emit logs which internally emit logs by leveraging python
 :class:`logging`. The :func:`log` function is also available as a
 syntactic sugar for the emitter instance :meth:`log` method.
@@ -20,11 +20,19 @@ import heapq
 import io
 import json
 import logging
+import multiprocessing.managers
 import queue
 import threading
 import time
 from datetime import datetime
 from functools import partial
+
+
+def _nop(*args, **kwargs):
+    """
+    No Operation; an empty function
+    """
+    pass
 
 
 def _repr(s):
@@ -74,8 +82,19 @@ class WatchMessage(dict):
     timeout_on = None
     _ready = False
 
-    # dot notation access to dictionary attributes
-    __getattr__ = dict.get
+    def __getattr__(self, name):
+        """
+        Enable dot notation access to dictionary attributes
+        """
+        # Let's not mess with __ attributes; modules like
+        # multiprocessing may check attributes such as __getstate__
+        # and expect a callable object or AttributeError
+        if name.startswith("__"):
+            raise AttributeError(
+                f"{self.__class__!r} object has no attribute {name!r}")
+
+        # dot notation access to dictionary attributes
+        return self.get(name)
 
     def set_ready(self):
         """
@@ -261,10 +280,45 @@ class WatchQueue:
     instead garbage collection is needed that will be automatically
     take place in the :meth:`get` method.
     """
-    def __init__(self, maxsize=0, default_delay_sec=0,
-                 force_default_delay=False, garbage_collection_limit=10000):
+
+    # A multiprocessing Condition for message passing between put/get
+    # methods
+    new_item_condition = multiprocessing.Condition()
+
+    def __new__(cls, maxsize=0, *, enable_multiprocessing=False, **kwargs):
         """
-        Create a new :class:`WatchQueue`.
+        With `enable_multiprocessing` set to False will work as usual and
+        calls the parent method which will in turn call the normal
+        :meth:`__init__` method.
+
+        But if `enable_multiprocessing` is True, it will use
+        :class:`WatchQueueManager` to create a started manager and
+        returns a proxy object
+        (:class:`multiprocessing.managers.BaseProxy`) to the
+        constructed WatchQueue. The manager will be stored as a class
+        attribute and will be shared among all the class instances.
+        """
+        if enable_multiprocessing and enable_multiprocessing != "_marked":
+            if not hasattr(cls, "_manager"):
+                cls._manager = WatchQueueManager()
+                cls._manager.start()
+
+            # Set enable_multiprocessing="_marked"; so basically the
+            # consequent __init__ call will assume
+            # enable_multiprocessing is True (and will not create a
+            # threading Condition) but the consequent __new__ call
+            # knows that should not return a _manager proxy and ignore
+            # the enable_multiprocessing's value.
+            return cls._manager.WatchQueue(
+                maxsize, enable_multiprocessing="_marked", **kwargs)
+
+        return super().__new__(cls)
+
+    def __init__(self, maxsize=0, *, default_delay_sec=0,
+                 force_default_delay=False, garbage_collection_limit=10000,
+                 enable_multiprocessing=False):
+        """
+        Creates a new :class:`WatchQueue`.
 
         Without `force_default_delay` the
         :attr:`pymongo.watcher.logger.WatchMessage.timeout_on` will be
@@ -277,6 +331,8 @@ class WatchQueue:
            timeout even if the items has their own timeout.
          - `garbage_collection_limit`: peform garbage collection after
            generation of this amount of garbage
+         - `enable_multiprocessing`: boolean which controls enabling
+           the multiprocessing
         """
         self.maxsize = maxsize
         self.default_delay_sec = default_delay_sec
@@ -301,9 +357,8 @@ class WatchQueue:
         # Value = time.time() on insertion
         self.ready_items = {}
 
-        # A threading Condition for message passing between put/get
-        # methods
-        self.new_item_condition = threading.Condition()
+        if not enable_multiprocessing:
+            self.new_item_condition = threading.Condition()
 
         # A set of WatchMessage items (the msg inside the LogRecord)
         # which are already returned by `get` method and are ready to
@@ -340,14 +395,14 @@ class WatchQueue:
 
         if self.force_default_delay or not ready:
             if ready is not None:  # ready is False
-                watch.ready_call_back = partial(self.__ready_call_back,
+                watch.ready_call_back = partial(self._ready_call_back,
                                                 item)
             with self.new_item_condition:
                 heapq.heappush(self.queue, (timeout_on, item))
                 self.new_item_condition.notify_all()
         else:
             # item is already in "ready" state
-            self.__ready_call_back(item)
+            self._ready_call_back(item)
 
     def get(self, block=True):
         """
@@ -479,7 +534,7 @@ class WatchQueue:
             ts, item = heapq.heappop(self.queue)
             if getattr(item, "watch", None):
                 # disable the ready_call_back
-                item.watch.reay_call_back = lambda x: None
+                item.watch.reay_call_back = _nop
 
             # Make sure the item will not be returned again as the
             # items that are ready. Here we don't need a garbage
@@ -522,7 +577,7 @@ class WatchQueue:
         for item in useful_items:
             heapq.heappush(self.queue, item)
 
-    def __ready_call_back(self, item):
+    def _ready_call_back(self, item):
         """
         The call back function that could be used as
         :meth:`pymongo.watcher.logger.WatchMessage.ready_call_back`. It
@@ -535,7 +590,19 @@ class WatchQueue:
             self.new_item_condition.notify_all()
 
 
-def getLogEmitter():
+class WatchQueueManager(multiprocessing.managers.BaseManager):
+    """
+    A :mod:`multiprocessing` manager with a :meth:`WatchQueue` method
+    which will return a proxy to a :class:`WatchQueue` object that can
+    be shared accross multiple processes
+    """
+    pass
+
+
+WatchQueueManager.register("WatchQueue", WatchQueue)
+
+
+def get_log_emitter():
     """
     Returns a singleton instance of the
     :class:`pymongo.watcher.logger.WatchLogEmitter` class.
@@ -556,4 +623,4 @@ def log(logger_name, msg, *, level=None):
     :class:`pymongo.watcher.logger.WatchLogEmitter` singleton instance
     :meth:`log` method with exactly the same arguments.
     """
-    getLogEmitter().log(logger_name, msg, level=level)
+    get_log_emitter().log(logger_name, msg, level=level)

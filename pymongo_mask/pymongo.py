@@ -71,9 +71,6 @@ finally:
 # full package).
 __path__ = real_pymongo.__path__
 
-# Now it's time to get back this module to the python's cache.
-sys.modules[__name__] = __this_moudle
-
 # Enable watcher module patches.
 real_pymongo.watcher.patch_pymongo()
 
@@ -138,3 +135,12 @@ if not logging.getLogger("pymongo.watcher").handlers:
         "No handler is configured for pymongo.watcher in the configuration "
         "file. The deafult handler will be used.")
     real_pymongo.watcher.add_logging_handlers()
+
+
+# Now it's time to get back this module to the python's cache.
+#
+# In practice, tests showed this line had to be executed after loading
+# the logging configuration which will create WatchQueue
+# multiprocessing proxies, otherwise it messes up the proxy internals
+# and calling its methods will strangely cause a dead-lock.
+sys.modules[__name__] = __this_moudle

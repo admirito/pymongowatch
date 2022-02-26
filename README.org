@@ -111,12 +111,13 @@ watcher.patch_pymongo()
 #+end_src
 
 All the =pymongowatch= watcher classes will use the logger retrieved
-with =pymongo.watcher.logger.getLogEmitter()= to emit their logs. Each
-module will emit the logs with their [[https://docs.python.org/3/tutorial/modules.html][__name__]]. So for example, all the
-cursor logs will be emitted under the =pymongo.watcher.cursor=. So you
-can apply specific logging configuration for each module or as all the
-logs has the prefix =pymongo.watcher= as their logger name you can
-apply global configuration with that name.
+with =pymongo.watcher.logger.get_log_emitter()= to emit their
+logs. Each module will emit the logs with their [[https://docs.python.org/3/tutorial/modules.html][__name__]]. So for
+example, all the cursor logs will be emitted under the
+=pymongo.watcher.cursor=. So you can apply specific logging
+configuration for each module or as all the logs has the prefix
+=pymongo.watcher= as their logger name you can apply global
+configuration with that name.
 
 #+begin_src python
 import logging
@@ -284,10 +285,10 @@ or =RetrievedCount=. So we have flexibility and it is =pymongowatch=
 users decision when to emit the final immutable log with the logger
 handlers.
 
-=pymongo.watcher.WatchQueue= alongside a [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][logging.handlers.QueueHandler]]
-is the right tool to make sure we handle logs at right time. A
-=WatchQueue= works like a priority queue which the earliest logs has
-the higher priority but some a twists.
+=WatchQueue= alongside a [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][QueueHandler]] is the right tool to make sure
+we handle logs at right time. A =WatchQueue= works like a priority
+queue which the earliest logs has the higher priority but some a
+twists.
 
 First, earliest log doesn't always mean the start time of the first
 operation and it doesn't always mean the end time of the operation. It
@@ -311,12 +312,41 @@ earlier accepts.
 
 The =add_logging_handlers= has a =with_queue= optional argument which
 if is =True= (the default), will use
-=pymongo.watcher.setup_queue_handler= to setup a
-[[https://docs.python.org/3/library/logging.handlers.html#queuehandler][logging.handlers.QueueHandler]] alongside a started
-[[https://docs.python.org/3/library/logging.handlers.html#queuelistener][logging.handlers.QueueListener]] for each handler you specify with a
+=pymongo.watcher.setup_queue_handler= to setup a [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][QueueHandler]]
+alongside a started [[https://docs.python.org/3/library/logging.handlers.html#queuelistener][QueueListener]] for each handler you specify with a
 =WatchQueue= so you usually don't have to worry about log mutation if
 you use =add_logging_handlers= to add your handlers to watcher
 loggers.
+
+** Multiprocessing
+
+Another useful application of [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][QueueHandler]] is its use in [[https://docs.python.org/3/howto/logging-cookbook.html#logging-to-a-single-file-from-multiple-processes][logging to a
+single file from multiple processes]]. For this application you have to
+use a multiprocessing =Queue= alongside the
+=QueueHandler=. Fortunately =WatchQueue= also supports
+multiprocessing. All you have to do is to pass =True= as the
+=enable_multiprocessing= argument.
+
+This is useful for example when you have a =pymongo= based web
+application with several web server processes and you need a process
+safe method to store the logs in a single file. Its worth noting that
+in such environments using the default value for
+=enable_multiprocessing= i.e. =False= will result in total failure in
+logging because the default =Queue= is not multiprocessing and the
+=QueueHandler= and the =QueueListener= will use different queues in
+different processes.
+
+Passing =True= as =enable_multiprocessing= in =WatchQueue= constructor
+will makes the constructor to build and return a [[https://docs.python.org/3/library/multiprocessing.html#proxy-objects][proxy object]] from a
+[[https://docs.python.org/3/library/multiprocessing.html#customized-managers][customized manager]] which has its own dedicated process. You can also
+pass =enable_multiprocessing= to =setup_queue_handler= and
+=add_logging_handlers=:
+
+#+begin_src python
+# Extra keyword arguments of `add_logging_handlers` will be passed to
+# the newly created WatchQueue for each handler.
+watcher.add_logging_handlers(enable_multiprocessing=True)
+#+end_src
 
 ** Pymongo Versions
 
@@ -371,6 +401,8 @@ not to use it and brag about it?
 *** DONE Implement pip package
 *** DONE Implement debian package
 *** TODO Implement unit tests
+*** DONE Supoort for multiprocessing
+*** TODO Create API reference document
 
 ** About
 
