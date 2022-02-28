@@ -32,8 +32,6 @@ def test(mongodb_url):
     client = pymongo.MongoClient(mongodb_url)
     db = client.pywatch
 
-    pymongo.watcher.WatchCursor._watch_default_delay_sec = 2
-
     it1 = db.pywatch.find()
     [None for _ in zip(range(10), it1)]
 
@@ -62,7 +60,7 @@ def test(mongodb_url):
     [None for _ in zip(range(31), it5)]
     it5.close()
 
-    time.sleep(2)
+    time.sleep(pymongo.watcher.WatchCursor._watch_default_delay_sec)
 
 
 if __name__ == '__main__':
@@ -114,6 +112,7 @@ if __name__ == '__main__':
         with open(args.config) as fp:
             config_dict = yaml.load(fp, Loader=yaml.CLoader)
         logging.config.dictConfig(config_dict)
+        pymongo.watcher.dictConfig(config_dict)
 
     if args.patching:
         pymongo.watcher.patch_pymongo()

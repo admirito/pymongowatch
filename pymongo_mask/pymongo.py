@@ -127,6 +127,12 @@ def __load_logging_config():
                 logging.config.dictConfig(config_dict)
             except Exception as exp:
                 warnings.warn(f"Cannot load {config_path}: {exp}")
+            else:
+                try:
+                    real_pymongo.watcher.dictConfig(config_dict)
+                except Exception as exp:
+                    warnings.warn(
+                        f"Cannot configure watchers from {config_path}: {exp}")
 
 
 __load_logging_config()

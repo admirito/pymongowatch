@@ -6,6 +6,10 @@
 
 version: 1
 
+watchers:
+  global:
+    default_delay_sec: 15
+
 formatters:
   normal:
     format: "{watch}"
