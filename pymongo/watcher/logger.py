@@ -24,6 +24,7 @@ import multiprocessing.managers
 import queue
 import threading
 import time
+import weakref
 from datetime import datetime
 from functools import partial
 
@@ -79,6 +80,8 @@ class WatchMessage(dict):
     default_keys = None
     default_delimiter = " "
     default_key_value_separator = "="
+    enable_multiprocessing = False
+
     timeout_on = None
     _ready = False
 
@@ -151,7 +154,8 @@ class WatchMessage(dict):
         return str(value)
 
     @classmethod
-    def make(cls, message_dict, ready=False, delay_sec=None, **kwargs):
+    def make(cls, message_dict, ready=False, delay_sec=None,
+             enable_multiprocessing=None, **kwargs):
         """
         Alternative constructor of the class which returns an instance of
         the class with message_dict as the base dictionary passed to
@@ -162,7 +166,8 @@ class WatchMessage(dict):
 
         :Parameters:
          - `message_dict`: the base dictionary
-         - `ready` (optional): call :meth:`set_ready` method while instantiating
+         - `ready` (optional): call :meth:`set_ready` method while
+           instantiating
          - `delay_sec` (optional): the seconds after the current time
            to be set as :attr:`timeout_on`
         """
@@ -176,6 +181,12 @@ class WatchMessage(dict):
 
         if ready:
             result.set_ready()
+
+        if (enable_multiprocessing or enable_multiprocessing is None and
+                cls.enable_multiprocessing):
+            result_proxy = WatchQueue._manager.WatchMessage(result)
+            result_proxy.timeout_on = result.timeout_on
+            return result_proxy
 
         return result
 
@@ -283,7 +294,9 @@ class WatchQueue:
 
     # A multiprocessing Condition for message passing between put/get
     # methods
-    new_item_condition = multiprocessing.Condition()
+    new_item_condition = threading.Condition()
+
+    _instances = {}
 
     def __new__(cls, maxsize=0, *, enable_multiprocessing=False, **kwargs):
         """
@@ -292,16 +305,18 @@ class WatchQueue:
         :meth:`__init__` method.
 
         But if `enable_multiprocessing` is True, it will use
-        :class:`WatchQueueManager` to create a started manager and
-        returns a proxy object
+        :class:`WatchMultiprocessingManager` to create a started
+        manager and returns a proxy object
         (:class:`multiprocessing.managers.BaseProxy`) to the
         constructed WatchQueue. The manager will be stored as a class
         attribute and will be shared among all the class instances.
         """
         if enable_multiprocessing and enable_multiprocessing != "_marked":
             if not hasattr(cls, "_manager"):
-                cls._manager = WatchQueueManager()
+                cls._manager = WatchMultiprocessingManager()
                 cls._manager.start()
+
+            WatchMessage.enable_multiprocessing = True
 
             # Set enable_multiprocessing="_marked"; so basically the
             # consequent __init__ call will assume
@@ -338,6 +353,9 @@ class WatchQueue:
         self.default_delay_sec = default_delay_sec
         self.force_default_delay = force_default_delay
         self.garbage_collection_limit = garbage_collection_limit
+
+        self._id = id(self)
+        self._instances[self._id] = weakref.ref(self)
 
         # The inner queue of LogRecords; we will use heapq to maintain
         # a list of LogRecords sorted by their `watch.timeout_on`
@@ -589,8 +607,19 @@ class WatchQueue:
             self.ready_items[item] = time.time()
             self.new_item_condition.notify_all()
 
+    def __setstate__(self, state):
+        self.__dict__.update(**state)
+        try:
+            instance = self._instances[self._id]()
+        except KeyError:
+            pass
+        else:
+            if instance:
+                self.ready_items = instance.ready_items
+                self.garbage_items = instance.garbage_items
 
-class WatchQueueManager(multiprocessing.managers.BaseManager):
+
+class WatchMultiprocessingManager(multiprocessing.managers.SyncManager):
     """
     A :mod:`multiprocessing` manager with a :meth:`WatchQueue` method
     which will return a proxy to a :class:`WatchQueue` object that can
@@ -599,7 +628,60 @@ class WatchQueueManager(multiprocessing.managers.BaseManager):
     pass
 
 
-WatchQueueManager.register("WatchQueue", WatchQueue)
+class WatchMessageProxy(multiprocessing.managers.BaseProxy):
+    _exposed_ = (
+        "__contains__", "__delitem__", "__getitem__", "__iter__", "__len__",
+        "__setitem__", "clear", "copy", "get", "items",
+        "keys", "pop", "popitem", "setdefault", "update", "values",
+        "__getattribute__", "__getattr__", "__str__", "set_ready",
+        "__setattr__", "__hash__")
+
+    @property
+    def full(self):
+        return self._callmethod("__getattribute__", ("full",))
+
+    @property
+    def csv(self):
+        return self._callmethod("__getattribute__", ("csv",))
+
+    @property
+    def _ready(self):
+        return self._getvalue()._ready
+
+    @property
+    def timeout_on(self):
+        return self._getvalue().timeout_on
+
+    def keys(self):
+        return self._callmethod("keys")
+
+    def set_ready(self):
+        return self._callmethod("set_ready")
+
+    def __getitem__(self, key):
+        return self._callmethod("__getitem__", (key,))
+
+    def __setitem__(self, key, value):
+        return self._callmethod("__setitem__", (key, value))
+
+    def __str__(self):
+        return self._callmethod("__str__")
+
+    def __hash__(self):
+        return self._callmethod("__hash__")
+
+    def __eq__(self, other):
+        return self.__hash__() == other.__hash__()
+
+    def __setattr__(self, key, value):
+        if key in ["ready_call_back", "timeout_on"]:
+            return self._callmethod("__setattr__", (key, value))
+        return super().__setattr__(key, value)
+
+
+WatchMultiprocessingManager.register("WatchQueue", WatchQueue)
+WatchMultiprocessingManager.register("WatchMessage", WatchMessage,
+                                     WatchMessageProxy)
 
 
 def get_log_emitter():

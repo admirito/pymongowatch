@@ -77,8 +77,6 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
                 delay_sec=self._watch_default_delay_sec)
             first_time = True
 
-        self._watch_log["LastRetrievedTime"] = datetime.now()
-
         _start = time.time()
         try:
             result = super().next()
@@ -88,6 +86,8 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
             self._watch_log["RetrievedCount"] = self.retrieved
             if first_time:
                 log(__name__, self._watch_log)
+
+        self._watch_log["LastRetrievedTime"] = datetime.now()
 
         return result
 

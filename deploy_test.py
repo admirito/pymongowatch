@@ -57,6 +57,11 @@ def test(mongodb_url):
     it2.rewind()
     list(it2)
 
+    it5 = db.pywatch.find({"a": {"$lt": 60}})
+    it5.batch_size(5)
+    [None for _ in zip(range(31), it5)]
+    it5.close()
+
     time.sleep(2)
 
 
