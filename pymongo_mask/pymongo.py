@@ -71,33 +71,82 @@ finally:
 # full package).
 __path__ = real_pymongo.__path__
 
-# Now it's time to get back this module to the python's cache.
-sys.modules[__name__] = __this_moudle
-
 # Enable watcher module patches.
 real_pymongo.watcher.patch_pymongo()
 
-# Loading pymongowatch logging yaml configurations from the lowest
-# priority to the highest, so the incremental configuration
-# [https://docs.python.org/3/library/logging.config.html#incremental-configuration]
-# can be used.
-for config_path in [
-        "/etc/pymongowatch.yaml",
-        "/etc/pymongowatch/pymongowatch.yaml",
-        os.path.join(pathlib.Path.home(), ".pymongowatch.yaml")]:
-    if os.path.isfile(config_path):
-        try:
-            with open(config_path) as fp:
-                config_dict = yaml.load(fp, Loader=yaml.CLoader)
 
-            logging.config.dictConfig(config_dict)
-        except Exception as exp:
-            warnings.warn(f"Cannot load {config_path}: {exp}")
-            import traceback
-            traceback.print_exc()
+def __load_logging_config():
+    config_paths = []
 
+    # The users which have used the pymongowatch-mask-installer have a
+    # symlink of this file, so it is important to use realpath to
+    # resolve the links.
+    current_path = pathlib.Path(os.path.realpath(__file__))
+
+    # In a Python virtual environment the etc is inside the venv
+    # directory, so to find the "etc", we start from the directory of
+    # the pymongo.py itself and go back to its parents step by step
+    # and search for an "etc". We continue this until we reach the
+    # lowest priority i.e. root or to be compatible with Windows
+    # systems "anchor".
+    while pathlib.Path(current_path.anchor) != current_path:
+        current_path = current_path.parent
+
+        # As we iterate in the while loop we are going from the
+        # highest priority to the lowest; so we add paths here in this
+        # direction, too. From the highest priority to the lowest;
+        # later we can reverse the whole list to get the desired
+        # result.
+        config_paths.extend(pathlib.Path(
+            current_path, "etc", "pymongowatch", "conf.d").glob("*.yaml"))
+        config_paths.append(pathlib.Path(
+            current_path, "etc", "pymongowatch", "pymongowatch.yaml"))
+        config_paths.append(pathlib.Path(
+            current_path, "etc", "pymongowatch.yaml"))
+
+    # We will load the pymongowatch logging yaml configurations from
+    # the lowest priority to the highest, so the incremental
+    # configuration
+    # [https://docs.python.org/3/library/logging.config.html#incremental-configuration]
+    # can be used. Note that, by default disable_existing_loggers is
+    # enabled for the dictConfig. So the newer configuration will
+    # replace the old configuration unless
+    # disable_existing_loggers=false explicitly specified in the
+    # configuration file.
+    config_paths.reverse()
+
+    config_paths.append(
+        pathlib.Path(pathlib.Path.home(), ".pymongowatch.yaml"))
+
+    for config_path in config_paths:
+        if config_path.is_file():
+            try:
+                with open(config_path) as fp:
+                    config_dict = yaml.load(fp, Loader=yaml.CLoader)
+
+                logging.config.dictConfig(config_dict)
+            except Exception as exp:
+                warnings.warn(f"Cannot load {config_path}: {exp}")
+            else:
+                try:
+                    real_pymongo.watcher.dictConfig(config_dict)
+                except Exception as exp:
+                    warnings.warn(
+                        f"Cannot configure watchers from {config_path}: {exp}")
+
+
+__load_logging_config()
 if not logging.getLogger("pymongo.watcher").handlers:
     warnings.warn(
         "No handler is configured for pymongo.watcher in the configuration "
         "file. The deafult handler will be used.")
     real_pymongo.watcher.add_logging_handlers()
+
+
+# Now it's time to get back this module to the python's cache.
+#
+# In practice, tests showed this line had to be executed after loading
+# the logging configuration which will create WatchQueue
+# multiprocessing proxies, otherwise it messes up the proxy internals
+# and calling its methods will strangely cause a dead-lock.
+sys.modules[__name__] = __this_moudle

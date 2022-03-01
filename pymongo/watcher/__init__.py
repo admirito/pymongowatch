@@ -41,7 +41,19 @@ import logging.handlers
 from .cursor import WatchCursor
 from .logger import WatchQueue
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+
+
+def dictConfig(config):
+    """
+    Configure the watcher using a dictionary. Similar to
+    :func:`logging.config.dictConfig`. The configuration will be
+    extracted from the "watchers" key.
+
+    :Parameters:
+     - config: configuration dictionary
+    """
+    WatchCursor.watch_dictConfig(config)
 
 
 def patch_pymongo():

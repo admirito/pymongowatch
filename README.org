@@ -31,13 +31,15 @@ without any modifications to existing applications.
 
 ** Quick Setup
 
-First you have to install =pymongowatch=. It is available at [[https://pypi.org/][Python
+First you have to install =pymongowatch=. It is available at [[https://pypi.org/project/pymongowatch/][Python
 Package Index (PyPI)]] and can be installed with [[https://pip.pypa.io/en/stable/][pip]]. At a [[https://docs.python.org/3/tutorial/venv.html][virtual
 environment]] or system-wide:
 
 #+begin_src shell
 pip install pymongowatch
 #+end_src
+
+[[https://github.com/admirito/pymongowatch#other-installation-options][Other installation options]] such as Debian packages are available, too.
 
 After basic installation, =pymongo.watcher= sub-package will be
 available and you have two options to go on:
@@ -81,7 +83,7 @@ even =pymongo= library itself.
 
 Furthermore, the pymongo mask will apply the configuration at
 =etc/pymongowatch.yaml= with [[https://docs.python.org/3/library/logging.config.html#logging.config.dictConfig][logging.config.dictConfig]] to the loggers
-of the watchers. A sample =etc/pymongowatch.yaml= is included in the
+of the watchers. A sample [[https://github.com/admirito/pymongowatch/blob/master/etc/pymongowatch.yaml][etc/pymongowatch.yaml]] is included in the
 =pymongowatch= package but you can modify it as needed. The [[https://en.wikipedia.org/wiki/YAML][yaml]]
 configuration follows the [[https://docs.python.org/3/library/logging.config.html#dictionary-schema-details][logging dictionary schema]].
 
@@ -109,12 +111,13 @@ watcher.patch_pymongo()
 #+end_src
 
 All the =pymongowatch= watcher classes will use the logger retrieved
-with =pymongo.watcher.logger.getLogEmitter()= to emit their logs. Each
-module will emit the logs with their [[https://docs.python.org/3/tutorial/modules.html][__name__]]. So for example, all the
-cursor logs will be emitted under the =pymongo.watcher.cursor=. So you
-can apply specific logging configuration for each module or as all the
-logs has the prefix =pymongo.watcher= as their logger name you can
-apply global configuration with that name.
+with =pymongo.watcher.logger.get_log_emitter()= to emit their
+logs. Each module will emit the logs with their [[https://docs.python.org/3/tutorial/modules.html][__name__]]. So for
+example, all the cursor logs will be emitted under the
+=pymongo.watcher.cursor=. So you can apply specific logging
+configuration for each module or as all the logs has the prefix
+=pymongo.watcher= as their logger name you can apply global
+configuration with that name.
 
 #+begin_src python
 import logging
@@ -163,13 +166,13 @@ watcher.add_logging_handlers(
     formatter="{asctime} {name}.{watch.Collection} - {watch.Query} fetched "
               "{watch.RetrievedCount} in {watch.RetrieveTime} seconds")
 
-# Add a more handler to log the full information for cursors
-cursor_full_handler = logging.FileHanlder(
-    "/tmp/watcher-cursor-full.log")
+# Add another handler to log the full information for cursors in csv
+cursor_csv_handler = logging.FileHanlder(
+    "/tmp/watcher-cursor-csv.log")
 watcher.add_logging_handlers(
-    cursor_full_handler,
+    cursor_csv_handler,
     logger_name="pymongo.watcher.cursor",
-    formatter="{asctime} {name} - {watch.full}")
+    formatter="{asctime},{name},{watch.csv}")
 #+end_src
 
 Note that using =add_logging_handlers= has not only the advantage of
@@ -220,7 +223,7 @@ def remove_private_data(data):
 class UserPrivacyFilter(logging.Filter):
     def filter(self, record):
         watch = getattr(record, "watch", {})
-        watch = remove_private_data(watch)
+        watch.update(remove_private_data(watch))
         return True
 #+end_src
 
@@ -282,10 +285,10 @@ or =RetrievedCount=. So we have flexibility and it is =pymongowatch=
 users decision when to emit the final immutable log with the logger
 handlers.
 
-=pymongo.watcher.WatchQueue= alongside a [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][logging.handlers.QueueHandler]]
-is the right tool to make sure we handle logs at right time. A
-=WatchQueue= works like a priority queue which the earliest logs has
-the higher priority but some a twists.
+=WatchQueue= alongside a [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][QueueHandler]] is the right tool to make sure
+we handle logs at right time. A =WatchQueue= works like a priority
+queue which the earliest logs has the higher priority but some a
+twists.
 
 First, earliest log doesn't always mean the start time of the first
 operation and it doesn't always mean the end time of the operation. It
@@ -309,12 +312,41 @@ earlier accepts.
 
 The =add_logging_handlers= has a =with_queue= optional argument which
 if is =True= (the default), will use
-=pymongo.watcher.setup_queue_handler= to setup a
-[[https://docs.python.org/3/library/logging.handlers.html#queuehandler][logging.handlers.QueueHandler]] alongside a started
-[[https://docs.python.org/3/library/logging.handlers.html#queuelistener][logging.handlers.QueueListener]] for each handler you specify with a
+=pymongo.watcher.setup_queue_handler= to setup a [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][QueueHandler]]
+alongside a started [[https://docs.python.org/3/library/logging.handlers.html#queuelistener][QueueListener]] for each handler you specify with a
 =WatchQueue= so you usually don't have to worry about log mutation if
 you use =add_logging_handlers= to add your handlers to watcher
 loggers.
+
+** Multiprocessing
+
+Another useful application of [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][QueueHandler]] is its use in [[https://docs.python.org/3/howto/logging-cookbook.html#logging-to-a-single-file-from-multiple-processes][logging to a
+single file from multiple processes]]. For this application you have to
+use a multiprocessing =Queue= alongside the
+=QueueHandler=. Fortunately =WatchQueue= also supports
+multiprocessing. All you have to do is to pass =True= as the
+=enable_multiprocessing= argument.
+
+This is useful for example when you have a =pymongo= based web
+application with several web server processes and you need a process
+safe method to store the logs in a single file. Its worth noting that
+in such environments using the default value for
+=enable_multiprocessing= i.e. =False= will result in total failure in
+logging because the default =Queue= is not multiprocessing and the
+=QueueHandler= and the =QueueListener= will use different queues in
+different processes.
+
+Passing =True= as =enable_multiprocessing= in =WatchQueue= constructor
+will makes the constructor to build and return a [[https://docs.python.org/3/library/multiprocessing.html#proxy-objects][proxy object]] from a
+[[https://docs.python.org/3/library/multiprocessing.html#customized-managers][customized manager]] which has its own dedicated process. You can also
+pass =enable_multiprocessing= to =setup_queue_handler= and
+=add_logging_handlers=:
+
+#+begin_src python
+# Extra keyword arguments of `add_logging_handlers` will be passed to
+# the newly created WatchQueue for each handler.
+watcher.add_logging_handlers(enable_multiprocessing=True)
+#+end_src
 
 ** Pymongo Versions
 
@@ -333,13 +365,35 @@ cursors more intelligently and you can usually see the =cursor= logs
 very fast without any need to a explicit timeout whereas any =3=
 series usually an explicit timeout is required.
 
-** Debian Packages
+** Other Installation Options
+
+*** Debian Packages
 
 If you are a [[https://www.debian.org/][Debian]]-based GNU/Linux distribution user you are in luck!
-There is a Debian package maintained in the [[https://github.com/admirito/pymongowatch/tree/master][project's debian branch]]
+There is a Debian package maintained in the [[https://github.com/admirito/pymongowatch/tree/debian][project's debian branch]]
 that can make your installation even easier.
 
+You can find the binary packages at [[https://launchpad.net/~mrazavi/+archive/ubuntu/pymongowatch][mrazavi's pymongowatch PPA]] and to
+install it on Ubuntu:
+
+#+begin_src shell
+sudo add-apt-repository ppa:mrazavi/pymongowatch
+sudo apt update
+
+sudo apt install python3-pymongowatch
+#+end_src
+
 ** TODOs
+
+If you see an ugly TODO list below with oversize items, it's not even
+clear which items are DONE and which ones are still TODO, maybe that
+is because this document is written in [[https://orgmode.org/][org-mode]] but you are seeing a
+bad render e.g. in [[https://github.com/github/markup/blob/master/README.md#markups][GitHub]] or a converted reStructuredText format
+e.g. because [[https://packaging.python.org/en/latest/guides/making-a-pypi-friendly-readme/][the lack of org-mode support in PyPI]].
+
+That doesn't make org-mode less lovable or inferior. Anyway [[https://karl-voit.at/2017/09/23/orgmode-as-markup-only/][org-mode
+is one of the most reasonable markup languages to use for text]]. Why
+not to use it and brag about it?
 
 *** DONE Support queries with find
 *** TODO Support for collection delete
@@ -347,6 +401,8 @@ that can make your installation even easier.
 *** DONE Implement pip package
 *** DONE Implement debian package
 *** TODO Implement unit tests
+*** DONE Supoort for multiprocessing
+*** TODO Create API reference document
 
 ** About
 

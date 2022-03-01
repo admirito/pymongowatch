@@ -5,7 +5,7 @@ This module implements the required classes to emit logs in the
 watchers.
 
 All the :mod:`pymongo.watcher` modules use a singleton instance of
-:class:`WatchLogEmitter` class returned by :func:`getLogEmitter` to
+:class:`WatchLogEmitter` class returned by :func:`get_log_emitter` to
 emit logs which internally emit logs by leveraging python
 :class:`logging`. The :func:`log` function is also available as a
 syntactic sugar for the emitter instance :meth:`log` method.
@@ -15,14 +15,38 @@ syntactic sugar for the emitter instance :meth:`log` method.
    "logger" seems more appropriate.
 """
 
+import csv
 import heapq
+import io
 import json
 import logging
+import multiprocessing.managers
 import queue
 import threading
 import time
+import weakref
 from datetime import datetime
 from functools import partial
+
+
+def _nop(*args, **kwargs):
+    """
+    No Operation; an empty function
+    """
+    pass
+
+
+def _repr(s):
+    """
+    Returns repr(s) but always use single-quotes
+
+    Using single-quotes has the advantage that when combined with json
+    strings (which only use double-quotes) less escaping is required.
+    """
+    # repr will use double-quotes if the sring contains single-quotes
+    # but no double-quotes; so if we add a double-quote to the string
+    # we can be sure repr will use single-quotes
+    return "'" + repr(f'"{s}')[2:]
 
 
 class WatchMessage(dict):
@@ -56,11 +80,24 @@ class WatchMessage(dict):
     default_keys = None
     default_delimiter = " "
     default_key_value_separator = "="
+    enable_multiprocessing = False
+
     timeout_on = None
     _ready = False
 
-    # dot notation access to dictionary attributes
-    __getattr__ = dict.get
+    def __getattr__(self, name):
+        """
+        Enable dot notation access to dictionary attributes
+        """
+        # Let's not mess with __ attributes; modules like
+        # multiprocessing may check attributes such as __getstate__
+        # and expect a callable object or AttributeError
+        if name.startswith("__"):
+            raise AttributeError(
+                f"{self.__class__!r} object has no attribute {name!r}")
+
+        # dot notation access to dictionary attributes
+        return self.get(name)
 
     def set_ready(self):
         """
@@ -82,26 +119,43 @@ class WatchMessage(dict):
         pass
 
     @staticmethod
-    def prepare_value(value):
+    def prepare_value(value, application="simple"):
         """
         An static method which will be called by all the string serializes
         of the class to serializes the dictionary values.
 
         :Parameters:
          - `value`: the input value for serialization
+         - `application` (optional): for which application the value
+           should be prepared e.g. simple, full or csv
         """
         if isinstance(value, datetime):
-            value = value.strftime('%Y-%m-%d %X,%f')[:-3]
-        elif isinstance(value, float):
+            if application == "csv":
+                return value.strftime("%Y-%m-%d %X.%f")
+            else:
+                return f"'{value.strftime('%Y-%m-%d %X,%f')[:-3]}'"
+        elif isinstance(value, float) and application == "simple":
             return f"{value:.3f}"
+        elif isinstance(value, (list, dict)):
+            try:
+                value = json.dumps(value)
+            except Exception:
+                value = str(value)
 
-        try:
+            if application == "full":
+                return _repr(value)
+            else:
+                return value
+        elif isinstance(value, str) and application != "csv":
+            return _repr(value)
+        elif isinstance(value, bool):
             return json.dumps(value)
-        except Exception:
-            return str(value)
+
+        return str(value)
 
     @classmethod
-    def make(cls, message_dict, ready=False, delay_sec=None, **kwargs):
+    def make(cls, message_dict, ready=False, delay_sec=None,
+             enable_multiprocessing=None, **kwargs):
         """
         Alternative constructor of the class which returns an instance of
         the class with message_dict as the base dictionary passed to
@@ -112,7 +166,8 @@ class WatchMessage(dict):
 
         :Parameters:
          - `message_dict`: the base dictionary
-         - `ready` (optional): call :meth:`set_ready` method while instantiating
+         - `ready` (optional): call :meth:`set_ready` method while
+           instantiating
          - `delay_sec` (optional): the seconds after the current time
            to be set as :attr:`timeout_on`
         """
@@ -127,6 +182,12 @@ class WatchMessage(dict):
         if ready:
             result.set_ready()
 
+        if (enable_multiprocessing or enable_multiprocessing is None and
+                cls.enable_multiprocessing):
+            result_proxy = WatchQueue._manager.WatchMessage(result)
+            result_proxy.timeout_on = result.timeout_on
+            return result_proxy
+
         return result
 
     @property
@@ -138,9 +199,35 @@ class WatchMessage(dict):
         """
         return self.default_delimiter.join(
             f"{key}{self.default_key_value_separator}"
-            f"{self.prepare_value(value)}"
+            f"{self.prepare_value(value, application='full')}"
             for key, value in self.items()
             if not key.startswith("_"))
+
+    @property
+    def csv(self):
+        """
+        A CSV (RFC-4180) serializer for the class values.
+
+        First all the columns according to :meth:`csv_columns` method
+        will be returned, then the remaining values.
+        """
+        csv_columns = self.csv_columns()
+        result = io.StringIO()
+        writer = csv.writer(result, dialect="unix", quoting=csv.QUOTE_MINIMAL)
+        writer.writerow(
+            [self.prepare_value(self.get(col, ""), application="csv")
+             for col in csv_columns] +
+            [self.prepare_value(value, application="csv")
+             for key, value in self.items() if key not in csv_columns])
+        return result.getvalue().rstrip("\n")
+
+    @classmethod
+    def csv_columns(cls):
+        """
+        Returns a list of column names that :meth:`csv` property will use
+        """
+        from .cursor import WatchCursor
+        return WatchCursor.watch_all_fields
 
     def __str__(self):
         keys = self.keys() if self.default_keys is None else self.default_keys
@@ -204,10 +291,49 @@ class WatchQueue:
     instead garbage collection is needed that will be automatically
     take place in the :meth:`get` method.
     """
-    def __init__(self, maxsize=0, default_delay_sec=0,
-                 force_default_delay=False, garbage_collection_limit=10000):
+
+    # A multiprocessing Condition for message passing between put/get
+    # methods
+    new_item_condition = threading.Condition()
+
+    _instances = {}
+
+    def __new__(cls, maxsize=0, *, enable_multiprocessing=False, **kwargs):
         """
-        Create a new :class:`WatchQueue`.
+        With `enable_multiprocessing` set to False will work as usual and
+        calls the parent method which will in turn call the normal
+        :meth:`__init__` method.
+
+        But if `enable_multiprocessing` is True, it will use
+        :class:`WatchMultiprocessingManager` to create a started
+        manager and returns a proxy object
+        (:class:`multiprocessing.managers.BaseProxy`) to the
+        constructed WatchQueue. The manager will be stored as a class
+        attribute and will be shared among all the class instances.
+        """
+        if enable_multiprocessing and enable_multiprocessing != "_marked":
+            if not hasattr(cls, "_manager"):
+                cls._manager = WatchMultiprocessingManager()
+                cls._manager.start()
+
+            WatchMessage.enable_multiprocessing = True
+
+            # Set enable_multiprocessing="_marked"; so basically the
+            # consequent __init__ call will assume
+            # enable_multiprocessing is True (and will not create a
+            # threading Condition) but the consequent __new__ call
+            # knows that should not return a _manager proxy and ignore
+            # the enable_multiprocessing's value.
+            return cls._manager.WatchQueue(
+                maxsize, enable_multiprocessing="_marked", **kwargs)
+
+        return super().__new__(cls)
+
+    def __init__(self, maxsize=0, *, default_delay_sec=0,
+                 force_default_delay=False, garbage_collection_limit=10000,
+                 enable_multiprocessing=False):
+        """
+        Creates a new :class:`WatchQueue`.
 
         Without `force_default_delay` the
         :attr:`pymongo.watcher.logger.WatchMessage.timeout_on` will be
@@ -220,11 +346,16 @@ class WatchQueue:
            timeout even if the items has their own timeout.
          - `garbage_collection_limit`: peform garbage collection after
            generation of this amount of garbage
+         - `enable_multiprocessing`: boolean which controls enabling
+           the multiprocessing
         """
         self.maxsize = maxsize
         self.default_delay_sec = default_delay_sec
         self.force_default_delay = force_default_delay
         self.garbage_collection_limit = garbage_collection_limit
+
+        self._id = id(self)
+        self._instances[self._id] = weakref.ref(self)
 
         # The inner queue of LogRecords; we will use heapq to maintain
         # a list of LogRecords sorted by their `watch.timeout_on`
@@ -244,9 +375,8 @@ class WatchQueue:
         # Value = time.time() on insertion
         self.ready_items = {}
 
-        # A threading Condition for message passing between put/get
-        # methods
-        self.new_item_condition = threading.Condition()
+        if not enable_multiprocessing:
+            self.new_item_condition = threading.Condition()
 
         # A set of WatchMessage items (the msg inside the LogRecord)
         # which are already returned by `get` method and are ready to
@@ -283,14 +413,14 @@ class WatchQueue:
 
         if self.force_default_delay or not ready:
             if ready is not None:  # ready is False
-                watch.ready_call_back = partial(self.__ready_call_back,
+                watch.ready_call_back = partial(self._ready_call_back,
                                                 item)
             with self.new_item_condition:
                 heapq.heappush(self.queue, (timeout_on, item))
                 self.new_item_condition.notify_all()
         else:
             # item is already in "ready" state
-            self.__ready_call_back(item)
+            self._ready_call_back(item)
 
     def get(self, block=True):
         """
@@ -422,7 +552,7 @@ class WatchQueue:
             ts, item = heapq.heappop(self.queue)
             if getattr(item, "watch", None):
                 # disable the ready_call_back
-                item.watch.reay_call_back = lambda x: None
+                item.watch.reay_call_back = _nop
 
             # Make sure the item will not be returned again as the
             # items that are ready. Here we don't need a garbage
@@ -465,7 +595,7 @@ class WatchQueue:
         for item in useful_items:
             heapq.heappush(self.queue, item)
 
-    def __ready_call_back(self, item):
+    def _ready_call_back(self, item):
         """
         The call back function that could be used as
         :meth:`pymongo.watcher.logger.WatchMessage.ready_call_back`. It
@@ -477,8 +607,84 @@ class WatchQueue:
             self.ready_items[item] = time.time()
             self.new_item_condition.notify_all()
 
+    def __setstate__(self, state):
+        self.__dict__.update(**state)
+        try:
+            instance = self._instances[self._id]()
+        except KeyError:
+            pass
+        else:
+            if instance:
+                self.ready_items = instance.ready_items
+                self.garbage_items = instance.garbage_items
 
-def getLogEmitter():
+
+class WatchMultiprocessingManager(multiprocessing.managers.SyncManager):
+    """
+    A :mod:`multiprocessing` manager with a :meth:`WatchQueue` method
+    which will return a proxy to a :class:`WatchQueue` object that can
+    be shared accross multiple processes
+    """
+    pass
+
+
+class WatchMessageProxy(multiprocessing.managers.BaseProxy):
+    _exposed_ = (
+        "__contains__", "__delitem__", "__getitem__", "__iter__", "__len__",
+        "__setitem__", "clear", "copy", "get", "items",
+        "keys", "pop", "popitem", "setdefault", "update", "values",
+        "__getattribute__", "__getattr__", "__str__", "set_ready",
+        "__setattr__", "__hash__")
+
+    @property
+    def full(self):
+        return self._callmethod("__getattribute__", ("full",))
+
+    @property
+    def csv(self):
+        return self._callmethod("__getattribute__", ("csv",))
+
+    @property
+    def _ready(self):
+        return self._getvalue()._ready
+
+    @property
+    def timeout_on(self):
+        return self._getvalue().timeout_on
+
+    def keys(self):
+        return self._callmethod("keys")
+
+    def set_ready(self):
+        return self._callmethod("set_ready")
+
+    def __getitem__(self, key):
+        return self._callmethod("__getitem__", (key,))
+
+    def __setitem__(self, key, value):
+        return self._callmethod("__setitem__", (key, value))
+
+    def __str__(self):
+        return self._callmethod("__str__")
+
+    def __hash__(self):
+        return self._callmethod("__hash__")
+
+    def __eq__(self, other):
+        return self.__hash__() == other.__hash__()
+
+    def __setattr__(self, key, value):
+        if key in ["ready_call_back", "timeout_on"]:
+            return self._callmethod("__setattr__", (key, value))
+        return super().__setattr__(key, value)
+
+
+WatchMultiprocessingManager.register("WatchQueue", WatchQueue)
+WatchMultiprocessingManager.register("WatchMessage", WatchMessage,
+                                     WatchMessageProxy)
+
+
+def get_log_emitter():
     """
     Returns a singleton instance of the
     :class:`pymongo.watcher.logger.WatchLogEmitter` class.
@@ -499,4 +705,4 @@ def log(logger_name, msg, *, level=None):
     :class:`pymongo.watcher.logger.WatchLogEmitter` singleton instance
     :meth:`log` method with exactly the same arguments.
     """
-    getLogEmitter().log(logger_name, msg, level=None)
+    get_log_emitter().log(logger_name, msg, level=level)

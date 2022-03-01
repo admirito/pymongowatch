@@ -1,0 +1,48 @@
+version: "3.7"
+services:
+  mongodb:
+    image: mongo:5
+    logging:
+      # disable logs on mongodb server
+      driver: none
+  test:
+    image: python:3.10
+    depends_on:
+      - mongodb
+    volumes:
+      - /usr/local/lib/python3.10/site-packages/
+      - ./etc:/etc/pymongowatch
+      - ./pymongo_mask:/usr/local/lib/python310.zip
+      - ./pymongo/watcher:/usr/local/lib/python3.10/site-packages/pymongo/watcher
+      - ./deploy_test.py:/deploy_test.py
+    command:
+      - bash
+      - -c
+      - |
+        rm -f /tmp/watch.log
+
+        [ -f /usr/local/lib/python3.10/site-packages/pymongo/__init__.py ] ||
+            pip install pymongo pyyaml
+
+        python -c 'if True:
+            import pymongo
+            import time
+            client = pymongo.MongoClient("mongodb")
+            db = client.pywatch
+            while True:
+                try:
+                    if db.pywatch.count_documents({}) < 100:
+                        print("inserting smaple data...")
+                        db.pywatch.insert_many([{"a": i} for i in range(100)])
+                    else:
+                        print("sample data found.")
+                except Exception as exp:
+                    print(exp)
+                    time.sleep(5)
+                else:
+                    break
+        '
+        python /deploy_test.py --normal-import --mongodb-url=mongodb://mongodb/pywatch --disable-patching --config=
+
+        echo
+        sh -xc "cat /tmp/watch.log"

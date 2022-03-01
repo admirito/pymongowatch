@@ -6,12 +6,19 @@
 
 version: 1
 
+watchers:
+  global:
+    default_delay_sec: 15
+
 formatters:
   normal:
     format: "{watch}"
     style: "{"
   full:
     format: "{asctime} {name} - {watch.full}"
+    style: "{"
+  csv:
+    format: "{asctime},{name},{watch.csv}"
     style: "{"
 
 filters:
@@ -34,6 +41,7 @@ handlers:
   console_queue_handler:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.console
+    enable_multiprocessing: true
   console:
     class: logging.StreamHandler
     formatter: normal
@@ -43,9 +51,10 @@ handlers:
   file_queue_handler:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.file
+    enable_multiprocessing: true
   file:
     class: logging.handlers.RotatingFileHandler
-    formatter: full
+    formatter: csv
     maxBytes: 104857600
     backupCount: 2
     filename: /tmp/watch.log
