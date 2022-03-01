@@ -22,6 +22,9 @@ case "$1" in
     configure)
 	. /usr/share/debconf/confmodule
 
+	touch /var/log/pymongowatch.log 2>/dev/null || true
+	chmod 666 /var/log/pymongowatch.log 2>/dev/null || true
+
 	db_get pymongowatch/custom_mask_install_path
 	install_path="$RET"
 	if [ -z "$install_path" ]; then

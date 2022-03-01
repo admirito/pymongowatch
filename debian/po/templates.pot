@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pymongowatch\n"
 "Report-Msgid-Bugs-To: pymongowatch@packages.debian.org\n"
-"POT-Creation-Date: 2022-02-19 14:48+0330\n"
+"POT-Creation-Date: 2022-03-01 10:34+0330\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -20,46 +20,51 @@ msgstr ""
 #. Type: select
 #. Choices
 #: ../templates:1001
-msgid "${choices} custom, none"
+msgid "${choices}"
 msgstr ""
 
 #. Type: select
-#. Default
-#: ../templates:1002
+#. Choices
+#: ../templates:1001
+msgid "custom"
+msgstr ""
+
+#. Type: select
+#. Choices
+#: ../templates:1001
 msgid "none"
 msgstr ""
 
 #. Type: select
 #. Description
-#: ../templates:1003
+#: ../templates:1002
 msgid "Install path for pymongo mask:"
 msgstr ""
 
 #. Type: select
 #. Description
-#: ../templates:1003
+#: ../templates:1002
 msgid ""
 "Pymongowatch is always accessible in a python application by importing "
 "pymongo.watcher sub-package. But sometimes you are not the author of a "
 "python program source code and you still want to use pymongowatch logging "
-"capabilities. In this case you can install \"pymongo mask\" to achieve this "
-"ability."
+"capabilities. In this case you can install \"pymongo mask\"."
 msgstr ""
 
 #. Type: select
 #. Description
-#: ../templates:1003
+#: ../templates:1002
 msgid ""
-"Pymongo mask, is a fake pymongo module which has to be installed on a higher "
-"priority sys.path than the real pymongo. It will use the real package as the "
-"backend and provide all the features as the real pymongo but it will enable "
-"pymongowatch by default. So applications unaware of pymognowatch can "
-"leverage its logging mechanism."
+"Pymongo mask, is a proxy for pymongo module which has to be installed on a "
+"higher priority sys.path than the real pymongo. It will use the real package "
+"as the backend and provide the same features but it will enable watchers by "
+"default. So applications unaware of pymognowatch can also use its logging "
+"system."
 msgstr ""
 
 #. Type: select
 #. Description
-#: ../templates:1003
+#: ../templates:1002
 msgid ""
 "Choose a path for pymongo mask installation, \"custom\" for entering an "
 "arbitrary path or \"none\" to skip installation of pymongo mask."

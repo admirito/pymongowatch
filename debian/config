@@ -29,8 +29,11 @@ case "$1" in
                 if not path: continue
                 if os.path.isdir(os.path.join(path, "pymongo")): break
                 paths += [path]
-            sys.stdout.write(", ".join(paths) + ",")
-        ' 2>/dev/null || echo "/usr/local/lib/python3/dist-packages,")
+            if paths:
+                sys.stdout.write(", ".join(paths))
+            else:
+                exit(1)
+        ' 2>/dev/null || echo "/usr/local/lib/python3/dist-packages")
 
 	DEFAULT_PATH=$(python3 -c 'if True:
             import sys, os
@@ -45,7 +48,7 @@ case "$1" in
         db_metaget pymongowatch/mask_install_path choices
         CHOICES=$RET
 
-        if [ "${PATHS} custom, none" != "$CHOICES" ]; then
+        if [ "${PATHS}, custom, none" != "$CHOICES" ]; then
 	    db_subst pymongowatch/mask_install_path choices $PATHS
 	    db_fset pymongowatch/mask_install_path seen false
 
