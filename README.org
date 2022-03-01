@@ -383,26 +383,44 @@ sudo apt update
 sudo apt install python3-pymongowatch
 #+end_src
 
-** TODOs
+** Roadmap
 
-If you see an ugly TODO list below with oversize items, it's not even
-clear which items are DONE and which ones are still TODO, maybe that
-is because this document is written in [[https://orgmode.org/][org-mode]] but you are seeing a
-bad render e.g. in [[https://github.com/github/markup/blob/master/README.md#markups][GitHub]] or a converted reStructuredText format
-e.g. because [[https://packaging.python.org/en/latest/guides/making-a-pypi-friendly-readme/][the lack of org-mode support in PyPI]].
+The project [[https://github.com/admirito/pymongowatch/issues][issue tracker]] is the main location to maintain the details
+for the future development. But here the cardinal points will be
+reviewed briefly.
 
-That doesn't make org-mode less lovable or inferior. Anyway [[https://karl-voit.at/2017/09/23/orgmode-as-markup-only/][org-mode
-is one of the most reasonable markup languages to use for text]]. Why
-not to use it and brag about it?
+- NOTE :: If you see an ugly TODO list below with oversize items, it's
+  not even clear which items are DONE and which ones are still TODO,
+  maybe that is because this document is written in [[https://orgmode.org/][org-mode]] but you
+  are seeing a bad render e.g. in [[https://github.com/github/markup/blob/master/README.md#markups][GitHub]] or a converted
+  reStructuredText format e.g. because [[https://packaging.python.org/en/latest/guides/making-a-pypi-friendly-readme/][the lack of org-mode support in
+  PyPI]].
+  
+  That doesn't make org-mode less lovable or inferior. Anyway [[https://karl-voit.at/2017/09/23/orgmode-as-markup-only/][org-mode
+  is one of the most reasonable markup languages to use for text]]. Why
+  not to use it and brag about it?
+
+#+TODO: TODO(t) DOING(i) | DONE(d)
 
 *** DONE Support queries with find
-*** TODO Support for collection delete
-*** TODO Support for collection insert
-*** DONE Implement pip package
-*** DONE Implement debian package
-*** TODO Implement unit tests
-*** DONE Supoort for multiprocessing
-*** TODO Create API reference document
+*** TODO Support for basic collection operations [[https://github.com/admirito/pymongowatch/issues/3][#3]]
+*** DONE Packaging
+**** DONE Implement pip package
+**** DONE Implement debian package
+**** TODO Automatic execution of tests
+*** DOING Tests
+**** DOING Unit Tests
+***** DONE Old Implementation
+***** TODO Update with the latest code
+*** DOING Deployment Tests
+***** DONE Basic Implementation
+***** TODO Add more complex tests
+*** DONE Support for multiprocessing
+*** TODO Improve mutable logs [[https://github.com/admirito/pymongowatch/issues/2][#2]]: add a unique ID for each operation
+*** TODO Documentation
+**** DONE Add a README
+**** TODO Add Sphinx generated documents
+**** TODO Create an online API reference
 
 ** About
 
