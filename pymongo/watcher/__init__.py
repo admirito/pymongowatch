@@ -53,7 +53,7 @@ def dictConfig(config):
     :Parameters:
      - config: configuration dictionary
     """
-    WatchCursor.watch_dictConfig(config)
+    WatchCursor.watch_dictConfig(config, add_globals=True)
 
 
 def patch_pymongo():

@@ -43,9 +43,6 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
         "CreateTime", "LastRetrievedTime", "DB", "Collection", "Query",
         "RetrieveTime", "RetrievedCount")
 
-    # The default timeout in seconds for WatchMessage `timeout_on`
-    _watch_default_delay_sec = 600
-
     def rewind(self):
         """
         Call rewind on the origianl pymongo's Cursor to rewind this cursor
@@ -59,7 +56,10 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
         """
         Call next on the origianl pymongo's Cursor to advance the cursor.
         """
-        if not hasattr(self, "_watch_log"):
+        if hasattr(self, "_watch_log"):
+            log_level = self._watch_log_level_update
+        else:
+            log_level = self._watch_log_level_first
             self._watch_log = WatchMessage(
                 LastRetrievedTime=None,
                 DB=self.collection.database.name,
@@ -68,6 +68,7 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
                 RetrieveTime=0,
                 RetrievedCount=0)
             self._watch_log.default_keys = self.watch_default_fields
+            self._watch_log.timeout_log_level = self._watch_log_level_timeout
 
         _start = time.time()
         try:
@@ -99,15 +100,16 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
                 self._watch_log["RetrieveTime"] += _end - _start
                 self._watch_log["RetrievedCount"] = self.retrieved
                 self._watch_log["Iteration"] += 1
-                self._watch_log.set_timeout(self._watch_default_delay_sec)
+                self._watch_log.set_timeout(self._watch_timeout_sec)
 
                 if getattr(self, "_watch_cursor_skipped_finalization", False):
                     # If `close` method skipped finalization we have
                     # to call it here instead.
                     del self._watch_cursor_skipped_finalization
                     self._watch_log.finalize()
+                    log_level = self._watch_log_level_final
 
-                log(__name__, self._watch_log)
+                log(__name__, self._watch_log, level=log_level)
 
         return result
 
@@ -130,7 +132,45 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
                 if not self._watch_log.final:
                     self._watch_log["Iteration"] += 1
                     self._watch_log.finalize()
-                    log(__name__, self._watch_log)
+                    log(__name__, self._watch_log,
+                        level=self._watch_log_level_final)
+
+    @classmethod
+    def watch_dictConfig(cls, config, add_globals=True):
+        """
+        Configure the watcher using a dictionary. Similar to
+        :func:`logging.config.dictConfig`. The configuration will be
+        extracted from the the "watchers" key in the `config`
+        dictionary. This method implements the "cursor" section
+        configuration.
+
+        :Parameters:
+         - config: configuration dictionary
+         - add_globals (optional): A boolean indicating weather to
+           load the "global" section or not.
+        """
+        super().watch_dictConfig(config, add_globals=add_globals)
+
+        _cursor = config.get("watchers", {}).get("cursor", {})
+
+        with contextlib.suppress(Exception):
+            cls._watch_timeout_sec = int(_cursor["timeout_sec"])
+
+        log_level = _cursor.get("log_level", {})
+        levels = cls._watch_configurtor.configure_watch_log_level(log_level)
+        for log_type in ["first", "update", "final", "timeout"]:
+            with contextlib.suppress(KeyError):
+                setattr(cls, f"_watch_log_level_{log_type}", levels[log_type])
+
+        try:
+            default_fields = tuple(key for key in
+                                   _cursor.get("default_fields", [])
+                                   if key in cls.watch_all_fields)
+        except Exception:
+            default_fields = ()
+
+        if default_fields:
+            cls.watch_default_fields = default_fields
 
     @classmethod
     def watch_patch_pymongo(cls):

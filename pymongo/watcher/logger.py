@@ -15,6 +15,7 @@ syntactic sugar for the emitter instance :meth:`log` method.
    "logger" seems more appropriate.
 """
 
+import contextlib
 import csv
 import heapq
 import io
@@ -67,6 +68,7 @@ class WatchMessage(dict):
     default_keys = None
     default_delimiter = " "
     default_key_value_separator = "="
+    timeout_log_level = logging.INFO
 
     def __init__(self, /, *args, **kwargs):
         """
@@ -596,7 +598,22 @@ class WatchQueue:
                                 # unless it is a bug! In that case
                                 # returning the record is probably the
                                 # best possible solution.
+
                                 self._records.pop(_id)
+
+                                with contextlib.suppress(Exception):
+                                    if not record.watch.final:
+                                        # If the watch message is not
+                                        # final then it has to be
+                                        # timed out and we have to set
+                                        # its log level to the
+                                        # appropriate value.
+                                        record.levelno = \
+                                            record.watch.timeout_log_level
+                                        record.levelname = \
+                                            logging.getLevelName(
+                                                record.levelno)
+
                                 return record
 
                 # Now we know self._heap is empty or none of the items
