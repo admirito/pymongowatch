@@ -37,6 +37,23 @@ class BaseWatchConfigurator(logging.config.BaseConfigurator):
             with contextlib.suppress(KeyError):
                 setattr(cls, f"_watch_log_level_{log_type}", levels[log_type])
 
+        with contextlib.suppress(Exception):
+            for csv_item in _global.get("csv", []):
+                file_name = self.convert(csv_item.get("file"))
+                headers = csv_item.get("add_headers_if_empty")
+
+                if file_name and headers:
+                    from .logger import WatchMessage
+                    csv_columns = ",".join(WatchMessage.csv_columns())
+                    headers = headers.replace("{watch.csv}", csv_columns)
+                    headers = headers.rstrip("\n") + "\n"
+
+                    with contextlib.suppress(IOError, OSError):
+                        if not os.path.exists(file_name) or \
+                               os.path.getsize(file_name) == 0:
+                            with open(file_name, "w") as fp:
+                                fp.write(headers)
+
     def configure_watch_log_level(self, config):
         """
         Given a dictionary `config` i.e. "log_level" section of

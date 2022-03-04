@@ -40,8 +40,8 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
         "DB", "Collection", "Query", "RetrieveTime", "RetrievedCount")
 
     watch_all_fields = (
-        "CreateTime", "LastRetrievedTime", "DB", "Collection", "Query",
-        "RetrieveTime", "RetrievedCount")
+        "LastRetrievedTime", "DB", "Collection", "Query", "RetrieveTime",
+        "RetrievedCount")
 
     def rewind(self):
         """

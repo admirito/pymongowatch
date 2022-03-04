@@ -30,6 +30,16 @@ watchers:
       final: INFO
       timeout: INFO
 
+    # In this section you can add CSV column names to the given
+    # files. The columns will be added as the first line of the file
+    # only if the file is empty.
+    #
+    # Using cfg:// url-like values you can add a header to the files
+    # for the defined file log handlers.
+    csv:
+      - file: cfg://handlers.file.filename
+        add_headers_if_empty: "WatcherName,{watch.csv}"
+
   # cursor releated logs. The releated global section configuration
   # such as "timeout_sec" and "log level" could be overridden here.
   cursor:
@@ -55,7 +65,7 @@ formatters:
     format: "{asctime} {name} - {watch.full}"
     style: "{"
   csv:
-    format: "{asctime},{name},{watch.csv}"
+    format: "{name},{watch.csv}"
     style: "{"
 
 filters:
