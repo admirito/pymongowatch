@@ -416,7 +416,7 @@ reviewed briefly.
 ***** DONE Basic Implementation
 ***** TODO Add more complex tests
 *** DONE Support for multiprocessing
-*** TODO Improve mutable logs [[https://github.com/admirito/pymongowatch/issues/2][#2]]: add a unique ID for each operation
+*** DONE Improve mutable logs [[https://github.com/admirito/pymongowatch/issues/2][#2]]: add a unique ID for each operation
 *** TODO Documentation
 **** DONE Add a README
 **** TODO Add Sphinx generated documents
