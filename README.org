@@ -324,7 +324,8 @@ updates.
 
 The pitfall is now we may have thousands of updates and consequently
 thousands of logs for each operation. But this problem can easily be
-handled by =WatchQueue= or an external tool.
+handled by =WatchQueue= or an external tool such as
+=pymongowatch-csv=.
 
 =WatchQueue= alongside a [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][QueueHandler]] is the right tool to make sure
 we handle logs at right time. A =WatchQueue= works like a priority
@@ -357,6 +358,14 @@ alongside a started [[https://docs.python.org/3/library/logging.handlers.html#qu
 =WatchQueue= so you usually don't have to worry about log mutation if
 you use =add_logging_handlers= to add your handlers to watcher
 loggers.
+
+A =pymongowatch-csv= script is also available after the =pymongowatch=
+installation that can be used to aggregate all the iterations of a
+single operation into a single row when you use the =csv= format:
+
+#+begin_src shell
+pymongowatch-csv aggr /tmp/watch.csv > /tmp/aggregated-watch.csv
+#+end_src
 
 ** Multiprocessing
 
