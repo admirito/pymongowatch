@@ -41,7 +41,7 @@ import logging.handlers
 from .cursor import WatchCursor
 from .logger import WatchQueue
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 def dictConfig(config):
@@ -53,7 +53,7 @@ def dictConfig(config):
     :Parameters:
      - config: configuration dictionary
     """
-    WatchCursor.watch_dictConfig(config)
+    WatchCursor.watch_dictConfig(config, add_globals=True)
 
 
 def patch_pymongo():

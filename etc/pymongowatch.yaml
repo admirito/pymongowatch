@@ -7,8 +7,55 @@
 version: 1
 
 watchers:
+  # Global configuration for all the watcher classes
   global:
-    default_delay_sec: 15
+    # The default timeout for an operation before sending a log
+    timeout_sec: 10
+
+    # The emit log level for each type of log, "first" for when an
+    # operation begins, "update" for when we have new information
+    # about the started operation, "final" for when the operation has
+    # finished, and "timeout" for when an operation times out.
+    #
+    # Make sure that log level for all the related loggers and all the
+    # QueueHandlers are equal or lower than the lowest log level among
+    # all the log types here. Otherwise new information could not be
+    # fed to the QueueHandler.
+    #
+    # Also you can use cfg:// prefixed url-like values for each log
+    # level to reference other values inside the configuration file.
+    log_level:
+      first: DEBUG
+      update: DEBUG
+      final: INFO
+      timeout: INFO
+
+    # In this section you can add CSV column names to the given
+    # files. The columns will be added as the first line of the file
+    # only if the file is empty.
+    #
+    # Using cfg:// url-like values you can add a header to the files
+    # for the defined file log handlers.
+    csv:
+      - file: cfg://handlers.file.filename
+        add_headers_if_empty: "WatcherName,{watch.csv}"
+
+  # cursor releated logs. The releated global section configuration
+  # such as "timeout_sec" and "log level" could be overridden here.
+  cursor:
+    timeout_sec: 15
+
+    log_level:
+      final: INFO
+
+    # Default fields for "{watch}" template in log format for the
+    # cursors
+    default_fields:
+      - DB
+      - Collection
+      - Query
+      - RetrieveTime
+      - RetrievedCount"
 
 formatters:
   normal:
@@ -18,7 +65,7 @@ formatters:
     format: "{asctime} {name} - {watch.full}"
     style: "{"
   csv:
-    format: "{asctime},{name},{watch.csv}"
+    format: "{name},{watch.csv}"
     style: "{"
 
 filters:
@@ -42,8 +89,14 @@ handlers:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.console
     enable_multiprocessing: true
+    # To make sure QueueHandler will retrieve all the information from
+    # the watchers you have to set it to the lowest level for emitted
+    # logs. It will clear the undesired initial logs for the next handler
+    # (backend) itself.
+    level: DEBUG
   console:
     class: logging.StreamHandler
+    level: INFO
     formatter: normal
     filters:
       - slow
@@ -52,8 +105,10 @@ handlers:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.file
     enable_multiprocessing: true
+    level: DEBUG
   file:
     class: logging.handlers.RotatingFileHandler
+    level: INFO
     formatter: csv
     maxBytes: 104857600
     backupCount: 2
@@ -63,7 +118,12 @@ handlers:
 
 loggers:
   pymongo.watcher:
-    level: INFO
+    # This is the base log level that will be handled. Here we set it
+    # to the lowest value to make sure the middle QueueHandlers will
+    # not miss any updates. Please do not change this value unless
+    # you know exactly what you are doing.
+    level: DEBUG
+
     handlers:
       - console_queue_handler
       - file_queue_handler

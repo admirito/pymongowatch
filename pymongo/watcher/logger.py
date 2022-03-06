@@ -15,6 +15,7 @@ syntactic sugar for the emitter instance :meth:`log` method.
    "logger" seems more appropriate.
 """
 
+import contextlib
 import csv
 import heapq
 import io
@@ -22,18 +23,13 @@ import json
 import logging
 import multiprocessing.managers
 import queue
+import sys
 import threading
 import time
-import weakref
+from dataclasses import dataclass
 from datetime import datetime
-from functools import partial
 
-
-def _nop(*args, **kwargs):
-    """
-    No Operation; an empty function
-    """
-    pass
+import bson
 
 
 def _repr(s):
@@ -56,14 +52,6 @@ class WatchMessage(dict):
     objects as messages in Python Logging HOWTO
     <https://docs.python.org/3/howto/logging.html#using-arbitrary-objects-as-messages>`_.
 
-    The :meth:`make` class method could be used to create instances of
-    this class.  The default constuctor is compatible with
-    :class:`dict` which accepts all the keyword arguments as the
-    dictionary key/values.
-
-    The object :func:`id` is provided as the hash so the instaces
-    could be used as :class:`dict` keys.
-
     Dot notation access to keys is also available, so the
     :class:`logging.Formatter` can access the inner key/values.
 
@@ -74,16 +62,89 @@ class WatchMessage(dict):
      - `default_key_value_separator`: the separator between key/values
        in str format
      - `timeout_on`: A :class:`datetime.datetime` in which the message
-       will be assumed ready
+       will be assumed final
     """
 
     default_keys = None
     default_delimiter = " "
     default_key_value_separator = "="
-    enable_multiprocessing = False
+    timeout_log_level = logging.INFO
 
-    timeout_on = None
-    _ready = False
+    def __init__(self, /, *args, **kwargs):
+        """
+        Initialize self. This mehod has exactly the same signature as
+        standard dictionaries. It will automatically initialize the
+        dictionary with the following items if not already provided as
+        arguments:
+
+         - WatchID: A unqiue ID from bson.ObjectId()
+         - Iteration: 0
+         - CreateTime: current datetime
+        """
+        now = datetime.now()
+
+        # Insert default items as the first items because python
+        # dictionaries pereserve order on insertion and serialization
+        # methods like __str__ could have a more persistent
+        # output. Also we have to add them with the lowest priority to
+        # dict constructor because they could be changed if *args or
+        # **kwargs has different values for them.
+        super().__init__(
+            {"WatchID": None,
+             "Iteration": 0,
+             "CreateTime": None,
+             **dict(*args, **kwargs)})
+
+        # Initialize the instance attributes
+        self.timeout_on = now.timestamp()
+        if args:
+            arg = args[0]
+            # Here exactly like Python's dict __init__ we expect at
+            # most one argument. Again, just like the dict it could be
+            # an iterator or a mapping. But if it is a WatchMessage
+            # mapping we have to clone the instance attributes too.
+            if isinstance(arg, WatchMessage):
+                for key in ["timeout_on", "default_keys", "default_delimiter",
+                            "default_key_value_separator"]:
+                    setattr(self, key, getattr(arg, key))
+
+        create_time = None
+
+        if self["WatchID"] is None:
+            _id = bson.ObjectId()
+            self["WatchID"] = str(_id)
+            # bson ObjectId generation_time is in UTC which we will
+            # convert to local timezone.
+            create_time = _id.generation_time.astimezone(tz=None)
+
+        if self["CreateTime"] is None:
+            try:
+                create_time = (
+                    create_time or
+                    bson.ObjectId(self["WatchID"]
+                                  ).generation_time.astimezone(tz=None))
+            except Exception:
+                # If all the possible methods to generate consistent
+                # CreateTime compatible with WatchID failed, we use
+                # the current time as the last resort.
+                create_time = now
+
+            self["CreateTime"] = create_time
+
+    def set_timeout(self, seconds=None):
+        """
+        Set :attr:`timeout_on` to the datetime exactly `seconds` seconds
+        after the current time or None if `seconds` is 0 or other
+        values which will be evaluated to False.
+
+        :Parameters:
+         - `delay_sec` (optional): the seconds after the current time
+           to be set as :attr:`timeout_on`
+        """
+        # Use None for 0 and other values which evaluate to False
+        seconds = seconds or None
+
+        self.timeout_on = seconds and time.time() + seconds
 
     def __getattr__(self, name):
         """
@@ -99,24 +160,55 @@ class WatchMessage(dict):
         # dot notation access to dictionary attributes
         return self.get(name)
 
-    def set_ready(self):
+    @property
+    def iteration(self):
         """
-        Mark the object state as "ready" i.e. the log is mutated to its
-        final state and its ready to be handled by the
-        :mod:`logging.handlers`. The :meth:`ready_call_back` will be
-        called in this state change.
+        Returns the integer value for self["Iteration"], zero if not able
+        to cast it to :class:`int` or `sys.maxsize` if self.final is
+        True. Useful for easy comparison of different iterations of a
+        message.
         """
-        if not self._ready:
-            self.ready_call_back()
+        if self.final:
+            return sys.maxsize
 
-        self._ready = True
+        try:
+            return int(self["Iteration"])
+        except (KeyError, TypeError, ValueError):
+            return 0
 
-    def ready_call_back(self):
+    @property
+    def final(self):
         """
-        A method meant to be overridden. It will be called when the state
-        of the object turned to "ready" by :meth:`set_ready` method.
+        A read-only property that shows whether the message is in its
+        final unmutable state or not.
+
+        This mehod use "Iteration" value for checking the final
+        state. If it is an instance of :class:`str` it is final, if
+        not then it is not.
         """
-        pass
+        return isinstance(self.get("Iteration"), str)
+
+    def finalize(self):
+        """
+        Mark the message state as final i.e. the log is mutated to its
+        final state.
+
+        The marking will be applied by changing the "Iteration" item's
+        value to a string i.e. "final" with an optional "(n)" at the
+        end in which `n` is the previous value of the "Iteration"
+        key. The optional ending will only be added if `n` is an
+        instance of :class:`int`.
+        """
+        if not self.final:
+            now = time.time()
+            if self.timeout_on > now:
+                self.timeout_on = now
+
+            current_iteration = self.get("Iteration")
+            self["Iteration"] = (
+                "final" + (f"({current_iteration})"
+                           if isinstance(current_iteration, int) and
+                           current_iteration != 0 else ""))
 
     @staticmethod
     def prepare_value(value, application="simple"):
@@ -152,43 +244,6 @@ class WatchMessage(dict):
             return json.dumps(value)
 
         return str(value)
-
-    @classmethod
-    def make(cls, message_dict, ready=False, delay_sec=None,
-             enable_multiprocessing=None, **kwargs):
-        """
-        Alternative constructor of the class which returns an instance of
-        the class with message_dict as the base dictionary passed to
-        the parent :class:`dict` constructor.
-
-        Extra keyword arguments will be set as the attributes of the
-        returned object.
-
-        :Parameters:
-         - `message_dict`: the base dictionary
-         - `ready` (optional): call :meth:`set_ready` method while
-           instantiating
-         - `delay_sec` (optional): the seconds after the current time
-           to be set as :attr:`timeout_on`
-        """
-        result = cls(message_dict)
-
-        for key, value in kwargs.items():
-            setattr(result, key, value)
-
-        if delay_sec:
-            result.timeout_on = time.time() + delay_sec
-
-        if ready:
-            result.set_ready()
-
-        if (enable_multiprocessing or enable_multiprocessing is None and
-                cls.enable_multiprocessing):
-            result_proxy = WatchQueue._manager.WatchMessage(result)
-            result_proxy.timeout_on = result.timeout_on
-            return result_proxy
-
-        return result
 
     @property
     def full(self):
@@ -227,7 +282,8 @@ class WatchMessage(dict):
         Returns a list of column names that :meth:`csv` property will use
         """
         from .cursor import WatchCursor
-        return WatchCursor.watch_all_fields
+        return ("WatchID", "Iteration", "CreateTime"
+                ) + WatchCursor.watch_all_fields
 
     def __str__(self):
         keys = self.keys() if self.default_keys is None else self.default_keys
@@ -235,9 +291,6 @@ class WatchMessage(dict):
             f"{key}{self.default_key_value_separator}"
             f"{self.prepare_value(self.get(key))}"
             for key in keys)
-
-    def __hash__(self):
-        return id(self)
 
 
 class WatchLogEmitter:
@@ -269,35 +322,50 @@ class WatchLogEmitter:
         logging.getLogger(logger_name).log(level, msg, extra=extra)
 
 
-class WatchQueue:
+@dataclass
+class NonWatchQueueItem:
     """
-    A priority qeuue implementation similar to :class:`queue.Queue`
-    with :meth:`put_nowait` and :meth:`get` methods. The items put in
-    the queue should be :class:`logging.LogRecord` instances
-    containing :class:`pymongo.watcher.logger.WatchMessage` messages
-    or the sentinel returned by
+    A dataclass container for items of any type. :class:`WatchQueue`
+    uses this container to differentiate LogRecords with WatchMessage
+    items with other items such as the sentinel returned by
     :meth:`logging.handlers.QueueListener.enqueue_sentinel`.
 
-    The :meth:`get` method will return the LogRecords that are ready
-    (by :meth:`pymongo.watcher.logger.WatchMessage.set_ready`) or
+    The constructor accepted the item for storage and calling the
+    instance objects of this class will return the stored item.
+    """
+    item: "typing.Any"
+
+    def __call__(self):
+        return self.item
+
+
+class WatchQueue:
+    """
+    A priority queue implementation similar to :class:`queue.Queue`
+    with :meth:`put_nowait` and :meth:`get` methods. If the items put
+    in the queue are the instances of :class:`logging.LogRecord` and
+    they contain :class:`pymongo.watcher.logger.WatchMessage` messages
+    (with .watch attribute) they will be prioritized in the queue such
+    that the item with the least value for .watch.timeout_on will be
+    retrieved sooner.
+
+    Other items such as the sentinel returned by
+    :meth:`logging.handlers.QueueListener.enqueue_sentinel` can also
+    be inserted in the queue and they will be prioritized with the
+    time they will be putted in the queue (with time.time()).
+
+    The :meth:`get` method will return the LogRecords that are final
+    (by :meth:`pymongo.watcher.logger.WatchMessage.final`) or
     timedout.
 
     The class instances could be used as the queue for
     :class:`logging.handlers.QueueHandler` or any compatible
     implementation.
 
-    The queue items are internally stored in multiple containers such
-    as heap queues, dictionaries and sets for better performance but
-    instead garbage collection is needed that will be automatically
-    take place in the :meth:`get` method.
+    The queue items are internally tracked in multiple containers for
+    better performance but instead garbage collection is needed that
+    will be automatically take place in the :meth:`put` method.
     """
-
-    # A multiprocessing Condition for message passing between put/get
-    # methods
-    new_item_condition = threading.Condition()
-
-    _instances = {}
-
     def __new__(cls, maxsize=0, *, enable_multiprocessing=False, **kwargs):
         """
         With `enable_multiprocessing` set to False will work as usual and
@@ -316,76 +384,69 @@ class WatchQueue:
                 cls._manager = WatchMultiprocessingManager()
                 cls._manager.start()
 
-            WatchMessage.enable_multiprocessing = True
-
             # Set enable_multiprocessing="_marked"; so basically the
             # consequent __init__ call will assume
-            # enable_multiprocessing is True (and will not create a
-            # threading Condition) but the consequent __new__ call
-            # knows that should not return a _manager proxy and ignore
-            # the enable_multiprocessing's value.
+            # enable_multiprocessing is True but the consequent
+            # __new__ call knows that should not return a _manager
+            # proxy and ignore the enable_multiprocessing's value.
             return cls._manager.WatchQueue(
                 maxsize, enable_multiprocessing="_marked", **kwargs)
 
         return super().__new__(cls)
 
-    def __init__(self, maxsize=0, *, default_delay_sec=0,
-                 force_default_delay=False, garbage_collection_limit=10000,
+    def __init__(self, maxsize=0, *, forced_delay_sec=None,
+                 garbage_collection_rate=10000,
                  enable_multiprocessing=False):
         """
-        Creates a new :class:`WatchQueue`.
+        Creates a new :class:`WatchQueue` instance.
 
-        Without `force_default_delay` the
+        With a non-None value for `forced_delay_sec` the
         :attr:`pymongo.watcher.logger.WatchMessage.timeout_on` will be
-        used for each :class:`logging.LogRecord` item.
+        used for each :class:`logging.LogRecord` item. Otherwise all
+        the items, even the LogRecords with a final WatchMessage will
+        be retrieved only after the specified `forced_delay_sec`
+        timeout.
 
         :Parameters:
          - `maxsize`: the maximum size of the queue
-         - `default_delay_sec`: the default value for timeout of items
-         - `force_default_delay`: apply the `default_delay_sec`
-           timeout even if the items has their own timeout.
-         - `garbage_collection_limit`: peform garbage collection after
-           generation of this amount of garbage
+         - `forced_delay_sec`: the seconds which will be forced as the
+           timeout for every LogRecord
+         - `garbage_collection_rate`: peform garbage collection after
+           everytime this amount of items added to the queue
          - `enable_multiprocessing`: boolean which controls enabling
            the multiprocessing
         """
         self.maxsize = maxsize
-        self.default_delay_sec = default_delay_sec
-        self.force_default_delay = force_default_delay
-        self.garbage_collection_limit = garbage_collection_limit
+        self.forced_delay_sec = forced_delay_sec
+        self.garbage_collection_rate = garbage_collection_rate
 
-        self._id = id(self)
-        self._instances[self._id] = weakref.ref(self)
+        # A sorted storage of tuples of (timeout_on, watch_id) which
+        # will be maintained by heapq operations. WatchIDs are only
+        # saved as a reference to the items inside the self._records.
+        self._heap = []
 
-        # The inner queue of LogRecords; we will use heapq to maintain
-        # a list of LogRecords sorted by their `watch.timeout_on`
-        # attribute. So the items in this heap list are tuples of
-        # first the timestamp and second the LogRecord.
-        self.queue = []
+        # A map from `watch_id` to `record` item putted in the
+        # queue. This is the main storage of the items in the queue.
+        self._records = {}
 
-        # Alongside the heapq `queue` of items which can be used by
-        # `get` method to find the earliest log with O(1) time
-        # complexity, we have to maintain a dictionary of items that
-        # may be set as "ready" (by WatchMessage `set_ready` method)
-        # out of order so we can find them with O(1) time complexity
-        # too. As we have redundant LogRecords we require a garbage
-        # collection mechanism.
-        #
-        # Key   = LogRecords that their .watch is ready
-        # Value = time.time() on insertion
-        self.ready_items = {}
+        # A map from `watch_id` to `watch.iteration` for easy access
+        # when we want to make sure an item is the latest version or
+        # not.
+        self._last_iteration = {}
 
-        if not enable_multiprocessing:
-            self.new_item_condition = threading.Condition()
+        # A Condition for message passing between put/get methods. Its
+        # inner lock will also be used for making thread-safe access
+        # to interal containers.
+        self._new_item_condition = threading.Condition()
 
-        # A set of WatchMessage items (the msg inside the LogRecord)
-        # which are already returned by `get` method and are ready to
-        # be collected by the garbage collector
-        self.garbage_items = set()
+        # A counter for the number of times an item is added to the
+        # queue. Useful for running garbage collection.
+        self._putted_items = 0
 
     def put_nowait(self, item):
         """
-        Put the `item` into the queue. The items should be
+        Put the `item` into the queue. If the queue is the backend for
+        :class:`logging.handlers.QueueHandler` the items are usually
         :class:`logging.LogRecord` instances containing
         :class:`pymongo.watcher.logger.WatchMessage` messages or the
         sentinel returned by
@@ -394,229 +455,199 @@ class WatchQueue:
         :Parameters:
          - `item: the :class:`logging.LogRecord` item to be queued
         """
-        if len(self.queue) >= self.maxsize > 0:
-            raise queue.Full
+        now = time.time()
 
-        # Fetch the inner WatchMessage inside the LogRecord `item`;
-        # but sometimes items may not be a LogRecord (or even a
-        # LogRecord without a "watch" in case someone is messing with
-        # us!). For example the logging.handlers.QueueHandler put a
-        # sentinel object (usually i.e. None) to singal its thread for
-        # finalization.
+        # If the item is a LogRecord with a WatchMessage it will have
+        # a `watch` attribute. The logging.handlers.QueueHandler also
+        # may put a sentinel object (usually None) to singal its
+        # thread for finalization which does not have this attribute.
         watch = getattr(item, "watch", None)
 
-        timeout_on = time.time() + self.default_delay_sec
-        if not self.force_default_delay and watch:
-            timeout_on = watch.timeout_on or timeout_on
+        with self._new_item_condition:
+            if watch is None:
+                if len(self._heap) >= self.maxsize > 0:
+                    raise queue.Full
 
-        ready = watch._ready if watch else None
+                heapq.heappush(self._heap, (now, NonWatchQueueItem(item)))
+            else:
+                _id = watch.get("WatchID", "")
+                previous_record = self._records.get(_id)
 
-        if self.force_default_delay or not ready:
-            if ready is not None:  # ready is False
-                watch.ready_call_back = partial(self._ready_call_back,
-                                                item)
-            with self.new_item_condition:
-                heapq.heappush(self.queue, (timeout_on, item))
-                self.new_item_condition.notify_all()
-        else:
-            # item is already in "ready" state
-            self._ready_call_back(item)
+                ts = (watch.timeout_on if self.forced_delay_sec is None
+                      else now + self.forced_delay_sec)
+
+                if previous_record is None:
+                    # No previous record is present for this WatchID,
+                    # so this mus be a new record.
+
+                    if len(self._heap) >= self.maxsize > 0:
+                        raise queue.Full
+
+                    heapq.heappush(self._heap, (ts, _id))
+                    self._records[_id] = item
+                else:
+                    # A previous record is present for this WatchID.
+
+                    if watch.iteration > self._last_iteration.get(_id, -1):
+                        # The given record has a higher iteration than
+                        # the latest inserted item, so it is the newer
+                        # version and we have to update the _record
+                        # dictionary and also put a new reference to
+                        # the _heap. The old reference will be ignored
+                        # by `get` method when it timed out or it may
+                        # be removed by `garbage_collect`.
+
+                        self._last_iteration[_id] = watch.iteration
+                        self._records[_id] = item
+                        heapq.heappush(self._heap, (ts, _id))
+                    else:
+                        # This is an older version of a record which
+                        # we already have in the queue, we can ignore
+                        # it safely.
+                        return
+
+            # Here, we know no queue.Full exception has raised and if
+            # the method has not already returned, it means that in
+            # fact a new item has arrived (or updated). So we have to
+            # notify the `get` method.
+            self._new_item_condition.notify_all()
+
+            # Add count for garbage collection
+            self._putted_items += 1
+
+        if self._putted_items >= self.garbage_collection_rate:
+            self.garbage_collect()
 
     def get(self, block=True):
         """
         Returns the highest priority :class:`logging.LogRecord` item form
-        the queue which is ready or timedout or wait and blocks until
+        the queue which is final or timed out or wait and blocks until
         such item is present and then return one.
+
+        Non-LogRecord items will be returned with their insertion time
+        as the timeout; so they will always be returned without
+        blocking.
 
         The current implementation only supports block=True which is
         enough for :class:`logging.handlers.QueueHandle`.
 
         :Parameters:
-         - `block`: has no effect; just for compatibility with
+         - `block`: must be True; just for compatibility with
            :class:`logging.handlers.QueueHandler`
         """
-        # the fetching item might be None itself, so we need our own
-        # NONE to mark the null value.
-        NONE = object()
+        if not block:
+            raise NotImplementedError("Only block=True is implemented.")
 
-        # The timestamp for the item in the queue heap and the one in
-        # ready_items dictionary
-        queue_ts = ready_ts = None
-
-        queue_item = ready_item = NONE
-
-        with self.new_item_condition:
+        with self._new_item_condition:
             while True:
-                now = time.time()
+                wait_time = None
 
-                while True:
-                    if self.queue:
-                        # queue[0] is the smallest item; equivalent of
-                        # heapq.nsmallest(1, self.queue)[0]
-                        queue_ts, item = self.queue[0]
-                        queue_item = item if now >= queue_ts else NONE
+                while self._heap:
+                    now = time.time()
 
-                        item_watch = getattr(queue_item, "watch", None)
+                    # _heap[0] is the smallest item; equivalent of
+                    # heapq.nsmallest(1, self._heap)[0]
+                    heap_ts, _id = self._heap[0]
 
-                        # We have to skip items that are already
-                        # fetched (Because we have two parallel
-                        # mechanisms that may make the items legitimate
-                        # for fetching; (1) The timeout mechanism (2)
-                        # The manual marking with `set_ready`. And we
-                        # don't know which mechanism has already
-                        # returned the legitimate item)
-                        if item_watch in self.garbage_items:
-                            # This item has already fetched; so we have
-                            # to mark the queue_item as NONE again and
-                            # start over to find the legitimate item
-                            # to be returned
-                            queue_item = NONE
+                    if isinstance(_id, NonWatchQueueItem):
+                        return _id()
 
-                            # While we have found a garbage item,
-                            # someone might have called the put method
-                            # and added newer items (with earlier
-                            # timeout) in the queue, so if we don't be
-                            # cautious we may remove non-garbage items
-                            # by mistake.
-                            #
-                            # We can use the diverse types of python
-                            # thraeding locks to create mutual
-                            # exclusion, preven race conditions and
-                            # make sure no one can interfere with our
-                            # garbage collection mechanism.
-                            #
-                            # But damn the locks! They are just
-                            # academic stuff to make your programs
-                            # slower. If we can avoid using locks
-                            # we'll avoid using locks.
-                            #
-                            # Here, we loop through the newest items
-                            # till we found the item we expect
-                            # (hopefully most of the times, in our
-                            # first try) but if we found different
-                            # items we put them in poped_items list so
-                            # later we can put them back in the queue.
-                            poped_items = []
-                            while True:
-                                poped_ts, poped_item = heapq.heappop(
-                                    self.queue)
-                                if poped_item is item:
-                                    # found the expected item; let's
-                                    # remove it from the garbage_items
-                                    # and ignore it by breaking.
-                                    self.garbage_items.remove(item_watch)
-                                    break
-                                else:
-                                    # Oops! Bad luck. New items has
-                                    # arrived. Let's store them
-                                    # somewhere so we can put them
-                                    # back in the queue later.
-                                    poped_items.append((poped_ts, poped_item))
-                            # Restore the items into the queue that
-                            # were poped by mistake
-                            for item in poped_items:
-                                heapq.heappush(self.queue, item)
-                        else:
-                            # We have found our candidate (the
-                            # earliest item in the queue) that is not
-                            # already fetched
+                    record = self._records.get(_id)
+
+                    if record is None:
+                        # The record doesn't exist. Probably, a newer
+                        # version (iteration) of this record is
+                        # already fetched from the queue, so let's
+                        # remove this reference from the _heap and
+                        # forget about it.
+                        heapq.heappop(self._heap)
+                    else:
+                        if heap_ts > now:
+                            # This item has the lowest timeout in the
+                            # _heap (which means it is the highest
+                            # priority) but it is not yet timed
+                            # out. So we have to break and wait until
+                            # we are ready.
+                            wait_time = heap_ts - now
                             break
-                    else:  # if self.queue is empty:
-                        break
+                        else:
+                            # The highest priority item has timed out
+                            # (and is probably ready to be returned).
 
-                if self.ready_items:
-                    # Grab the first item from the self.reay_items
-                    # dictionary
-                    ready_item, ready_ts = next(iter(self.ready_items.items()))
+                            heapq.heappop(self._heap)
 
-                if queue_item is NONE and ready_item is NONE:
-                    # No item has timedout and no item has set to be
-                    # ready. If non-timedout items are present we have
-                    # to wait at most for the time between now and its
-                    # timeout or when someone triggers the
-                    # new_item_condition.
-                    timeout = queue_ts - now if queue_ts else None
-                    self.new_item_condition.wait(timeout)
-                else:
-                    # We have found our candidates for returning
-                    break
+                            if heap_ts >= record.watch.timeout_on:
+                                # The _records always has the latest
+                                # version (iteration) of each record,
+                                # so if the timestamp in the _heap has
+                                # a lower value, it is probably for an
+                                # older version and we have to wait
+                                # until the new version is also timed
+                                # out. So in that case only the
+                                # heappop instruction above is enough
+                                # and we have to continue the while
+                                # loop.
+                                #
+                                # But if we are inside this `if`
+                                # statement, the heap timeout is most
+                                # probably equal to the stored record
+                                # timed out because we hit exactly the
+                                # same reference.
+                                #
+                                # The > condition should never happen
+                                # unless it is a bug! In that case
+                                # returning the record is probably the
+                                # best possible solution.
 
-        if len(self.garbage_items) > self.garbage_collection_limit:
-            self.garbage_collect()
+                                self._records.pop(_id)
 
-        # If both queue_item and ready_item are present (not NONE) we
-        # will return the earliest one to make sure starvation will
-        # not occur in neither of the sides
-        if (queue_item is not NONE and
-                (ready_item is NONE or queue_ts < ready_ts)):
-            ts, item = heapq.heappop(self.queue)
-            if getattr(item, "watch", None):
-                # disable the ready_call_back
-                item.watch.reay_call_back = _nop
+                                with contextlib.suppress(Exception):
+                                    if not record.watch.final:
+                                        # If the watch message is not
+                                        # final then it has to be
+                                        # timed out and we have to set
+                                        # its log level to the
+                                        # appropriate value.
+                                        record.levelno = \
+                                            record.watch.timeout_log_level
+                                        record.levelname = \
+                                            logging.getLevelName(
+                                                record.levelno)
 
-            # Make sure the item will not be returned again as the
-            # items that are ready. Here we don't need a garbage
-            # collection mechanism because we can remove them from
-            # ready_items dictionary in O(1) time complexity.
-            self.ready_items.pop(item, None)
+                                return record
 
-            return item
-        else:  # the "ready" item is the right candidate for returning
-            watch_item = getattr(ready_item, "watch", None)
-            if watch_item:
-                # Here we have more time complexity to remove the item
-                # from the queue heap (to avoid redundant returnes by
-                # get method) as heaps are not very optimized for
-                # searching for the arbitrary items. So it is a better
-                # approach to store them in the garbage container and
-                # remove them in batch in garbage_collect method.
-                self.garbage_items.add(watch_item)
-
-            self.ready_items.pop(ready_item)
-
-            return ready_item
+                # Now we know self._heap is empty or none of the items
+                # has timed out.
+                self._new_item_condition.wait(wait_time)
 
     def garbage_collect(self):
         """
         Collect the garbage items and free memeory space.
 
         Usually you don't need to call this method manually as it will
-        be called automatically in :meth:`get` from time to time.
+        be called automatically in :meth:`put` from time to time.
         """
-        useful_items = []
-        while self.queue:
-            ts, item = heapq.heappop(self.queue)
-            watch_item = getattr(item, "watch", None)
-            if watch_item in self.garbage_items:
-                self.garbage_items.remove(watch_item)
-            else:
-                useful_items.append((ts, item))
+        with self._new_item_condition:
+            self._putted_items = 0
 
-        for item in useful_items:
-            heapq.heappush(self.queue, item)
+            old_heap = self._heap
+            self._heap = []
 
-    def _ready_call_back(self, item):
-        """
-        The call back function that could be used as
-        :meth:`pymongo.watcher.logger.WatchMessage.ready_call_back`. It
-        will add the `item` into the :attr:`ready_items` dictionary
-        and notify all the threads waiting for the
-        :attr:`new_item_condition`.
-        """
-        with self.new_item_condition:
-            self.ready_items[item] = time.time()
-            self.new_item_condition.notify_all()
+            active_ids = set()
 
-    def __setstate__(self, state):
-        self.__dict__.update(**state)
-        try:
-            instance = self._instances[self._id]()
-        except KeyError:
-            pass
-        else:
-            if instance:
-                self.ready_items = instance.ready_items
-                self.garbage_items = instance.garbage_items
+            for ts, _id in old_heap:
+                if isinstance(_id, NonWatchQueueItem):
+                    heapq.heappush(self._heap, (ts, _id))
+                else:
+                    record = self._records.get(_id)
+                    watch = getattr(record, "watch", None)
+                    if watch is not None and watch.timeout_on == ts:
+                        heapq.heappush(self._heap, (ts, _id))
+                        active_ids.add(_id)
+
+            self._last_iteration = {_id: it for _id, it
+                                    in self._last_iteration.items()
+                                    if _id in active_ids}
 
 
 class WatchMultiprocessingManager(multiprocessing.managers.SyncManager):
@@ -628,60 +659,7 @@ class WatchMultiprocessingManager(multiprocessing.managers.SyncManager):
     pass
 
 
-class WatchMessageProxy(multiprocessing.managers.BaseProxy):
-    _exposed_ = (
-        "__contains__", "__delitem__", "__getitem__", "__iter__", "__len__",
-        "__setitem__", "clear", "copy", "get", "items",
-        "keys", "pop", "popitem", "setdefault", "update", "values",
-        "__getattribute__", "__getattr__", "__str__", "set_ready",
-        "__setattr__", "__hash__")
-
-    @property
-    def full(self):
-        return self._callmethod("__getattribute__", ("full",))
-
-    @property
-    def csv(self):
-        return self._callmethod("__getattribute__", ("csv",))
-
-    @property
-    def _ready(self):
-        return self._getvalue()._ready
-
-    @property
-    def timeout_on(self):
-        return self._getvalue().timeout_on
-
-    def keys(self):
-        return self._callmethod("keys")
-
-    def set_ready(self):
-        return self._callmethod("set_ready")
-
-    def __getitem__(self, key):
-        return self._callmethod("__getitem__", (key,))
-
-    def __setitem__(self, key, value):
-        return self._callmethod("__setitem__", (key, value))
-
-    def __str__(self):
-        return self._callmethod("__str__")
-
-    def __hash__(self):
-        return self._callmethod("__hash__")
-
-    def __eq__(self, other):
-        return self.__hash__() == other.__hash__()
-
-    def __setattr__(self, key, value):
-        if key in ["ready_call_back", "timeout_on"]:
-            return self._callmethod("__setattr__", (key, value))
-        return super().__setattr__(key, value)
-
-
 WatchMultiprocessingManager.register("WatchQueue", WatchQueue)
-WatchMultiprocessingManager.register("WatchMessage", WatchMessage,
-                                     WatchMessageProxy)
 
 
 def get_log_emitter():

@@ -60,7 +60,19 @@ def test(mongodb_url):
     [None for _ in zip(range(31), it5)]
     it5.close()
 
-    time.sleep(pymongo.watcher.WatchCursor._watch_default_delay_sec)
+    it5.rewind()
+    it5.batch_size(10)
+    [None for _ in zip(range(31), it5)]
+
+    time.sleep(pymongo.watcher.WatchCursor._watch_timeout_sec / 2)
+
+    [None for _ in zip(range(10), it5)]
+
+    time.sleep(pymongo.watcher.WatchCursor._watch_timeout_sec / 2)
+
+    [None for _ in zip(range(10), it5)]
+
+    time.sleep(pymongo.watcher.WatchCursor._watch_timeout_sec)
 
 
 if __name__ == '__main__':
