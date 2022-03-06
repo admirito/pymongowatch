@@ -1,3 +1,9 @@
+pymongowatch (0.3.0-1) focal; urgency=medium
+
+  * New upstream release.
+
+ -- Mohammad Razavi <mrazavi64@gmail.com>  Sun, 06 Mar 2022 22:16:34 +0330
+
 pymongowatch (0.2.0-1) focal; urgency=medium
 
   * New upstream release.
