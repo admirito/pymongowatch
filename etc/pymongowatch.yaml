@@ -48,6 +48,11 @@ watchers:
     log_level:
       final: INFO
 
+    # Only emit cursor update logs when the retrieved count has
+    # changed. This could significantly reduce inter-process
+    # communications in a multiprocessing environment.
+    emit_on_new_retrieves: true
+
     # Default fields for "{watch}" template in log format for the
     # cursors
     default_fields:
@@ -55,7 +60,7 @@ watchers:
       - Collection
       - Query
       - RetrieveTime
-      - RetrievedCount"
+      - RetrievedCount
 
 formatters:
   normal:

@@ -43,6 +43,8 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
         "LastRetrievedTime", "DB", "Collection", "Query", "RetrieveTime",
         "RetrievedCount")
 
+    watch_emit_on_new_retrieves = True
+
     def rewind(self):
         """
         Call rewind on the origianl pymongo's Cursor to rewind this cursor
@@ -69,6 +71,8 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
                 RetrievedCount=0)
             self._watch_log.default_keys = self.watch_default_fields
             self._watch_log.timeout_log_level = self._watch_log_level_timeout
+
+        previous_retrieved = self.retrieved
 
         _start = time.time()
         try:
@@ -102,14 +106,20 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
                 self._watch_log["Iteration"] += 1
                 self._watch_log.set_timeout(self._watch_timeout_sec)
 
+                finalize = False
                 if getattr(self, "_watch_cursor_skipped_finalization", False):
+                    finalize = True
+
                     # If `close` method skipped finalization we have
                     # to call it here instead.
                     del self._watch_cursor_skipped_finalization
                     self._watch_log.finalize()
+
                     log_level = self._watch_log_level_final
 
-                log(__name__, self._watch_log, level=log_level)
+                if (finalize or not self.watch_emit_on_new_retrieves or
+                        previous_retrieved < self.retrieved):
+                    log(__name__, self._watch_log, level=log_level)
 
         return result
 
@@ -161,6 +171,10 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
         for log_type in ["first", "update", "final", "timeout"]:
             with contextlib.suppress(KeyError):
                 setattr(cls, f"_watch_log_level_{log_type}", levels[log_type])
+
+        with contextlib.suppress(KeyError):
+            cls.watch_emit_on_new_retrieves = \
+                _cursor["emit_on_new_retrieves"]
 
         try:
             default_fields = tuple(key for key in

@@ -41,7 +41,7 @@ import logging.handlers
 from .cursor import WatchCursor
 from .logger import WatchQueue
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 def dictConfig(config):
