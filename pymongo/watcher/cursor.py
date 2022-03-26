@@ -29,7 +29,7 @@ from .base import BaseWatcher
 from .logger import WatchMessage, log
 
 
-class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
+class WatchCursor(BaseWatcher, pymongo.cursor.Cursor):
     """
     A cursor / iterator over Mongo query results just like
     pymongo.cursor.Cusrsor class but it can also collect logs for
@@ -37,13 +37,15 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
     """
 
     watch_default_fields = (
-        "DB", "Collection", "Query", "RetrieveTime", "RetrievedCount")
+        "DB", "Collection", "Operation", "Filter", "Duration", "MatchedCount")
 
     watch_all_fields = (
-        "LastRetrievedTime", "DB", "Collection", "Query", "RetrieveTime",
-        "RetrievedCount")
+        "EndTime", "DB", "Collection", "Operation", "Filter", "Duration",
+        "MatchedCount")
 
     watch_emit_on_new_retrieves = True
+
+    _watch_name = __name__
 
     def rewind(self):
         """
@@ -63,12 +65,13 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
         else:
             log_level = self._watch_log_level_first
             self._watch_log = WatchMessage(
-                LastRetrievedTime=None,
+                EndTime=None,
                 DB=self.collection.database.name,
                 Collection=self.collection.name,
-                Query=self._Cursor__spec,
-                RetrieveTime=0,
-                RetrievedCount=0)
+                Operation="get_more",
+                Filter=self._Cursor__spec,
+                Duration=0,
+                MatchedCount=0)
             self._watch_log.default_keys = self.watch_default_fields
             self._watch_log.timeout_log_level = self._watch_log_level_timeout
 
@@ -94,15 +97,15 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
             result = super().next()
 
             # If StopIteration didn't occur:
-            self._watch_log["LastRetrievedTime"] = datetime.now()
+            self._watch_log["EndTime"] = datetime.now()
         finally:
             _end = time.time()
 
             del self._watch_cursor_next_is_in_progress
 
             if not final_state_before_next:
-                self._watch_log["RetrieveTime"] += _end - _start
-                self._watch_log["RetrievedCount"] = self.retrieved
+                self._watch_log["Duration"] += _end - _start
+                self._watch_log["MatchedCount"] = self.retrieved
                 self._watch_log["Iteration"] += 1
                 self._watch_log.set_timeout(self._watch_timeout_sec)
 
@@ -119,7 +122,7 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
 
                 if (finalize or not self.watch_emit_on_new_retrieves or
                         previous_retrieved < self.retrieved):
-                    log(__name__, self._watch_log, level=log_level)
+                    log(self._watch_name, self._watch_log, level=log_level)
 
         return result
 
@@ -142,7 +145,7 @@ class WatchCursor(pymongo.cursor.Cursor, BaseWatcher):
                 if not self._watch_log.final:
                     self._watch_log["Iteration"] += 1
                     self._watch_log.finalize()
-                    log(__name__, self._watch_log,
+                    log(self._watch_name, self._watch_log,
                         level=self._watch_log_level_final)
 
     @classmethod

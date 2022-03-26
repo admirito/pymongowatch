@@ -38,6 +38,7 @@ formatting by :func:`add_logging_handlers` function all in once:
 import atexit
 import logging.handlers
 
+from .collection import WatchCollection
 from .cursor import WatchCursor
 from .logger import WatchQueue
 
@@ -53,13 +54,15 @@ def dictConfig(config):
     :Parameters:
      - config: configuration dictionary
     """
-    WatchCursor.watch_dictConfig(config, add_globals=True)
+    WatchCollection.watch_dictConfig(config, add_globals=True)
+    WatchCursor.watch_dictConfig(config)
 
 
 def patch_pymongo():
     """
     Monkey patch pymongo methods to use pymongowatch logging system
     """
+    WatchCollection.watch_patch_pymongo()
     WatchCursor.watch_patch_pymongo()
 
 
@@ -67,7 +70,8 @@ def unpatch_pymongo():
     """
     Undo pymongo monkey patching
     """
-    WatchCursor.watch_patch_pymongo()
+    WatchCollection.watch_unpatch_pymongo()
+    WatchCursor.watch_unpatch_pymongo()
 
 
 queue_listners = []

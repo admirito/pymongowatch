@@ -40,13 +40,31 @@ watchers:
       - file: cfg://handlers.file.filename
         add_headers_if_empty: "WatcherName,{watch.csv}"
 
+  collection:
+    # timeout_sec: 10
+
+    # log_level:
+    #   final: INFO
+
+    # default_fields:
+    #   - DB
+    #   - Collection
+    #   - Operation
+    #   - Filter
+    #   - Duration
+    #   - MatchedCount
+    #   - InsertedCount
+    #   - UpsertedCount
+    #   - ModifiedCount
+    #   - DeletedCount
+
   # cursor releated logs. The releated global section configuration
   # such as "timeout_sec" and "log level" could be overridden here.
   cursor:
     timeout_sec: 15
 
-    log_level:
-      final: INFO
+    # log_level:
+    #   final: INFO
 
     # Only emit cursor update logs when the retrieved count has
     # changed. This could significantly reduce inter-process
@@ -58,9 +76,10 @@ watchers:
     default_fields:
       - DB
       - Collection
-      - Query
-      - RetrieveTime
-      - RetrievedCount
+      - Operation
+      - Filter
+      - Duration
+      - MatchedCount
 
 formatters:
   normal:
@@ -74,10 +93,12 @@ formatters:
     style: "{"
 
 filters:
+  results:
+    (): ext://pymongo.watcher.filters.AddPymongoResults
   slow:
     (): ext://pymongo.watcher.filters.ExpressionFilter
     expression: |
-      Collection == "pywatch" and RetrieveTime > 0.00001
+      Collection == "pywatch" and Duration > 0.00001
   mask:
     (): ext://pymongo.watcher.filters.ExecuteFilter
     execute: |
@@ -87,7 +108,7 @@ filters:
           [_mask(i) for i in d] if isinstance(d, list) else
           "x" * len(d) if isinstance(d, str) else
           0 if isinstance(d, _numbers.Number) else None)
-      Query = _mask(Query)
+      Filter = _mask(Filter)
 
 handlers:
   console_queue_handler:
@@ -99,18 +120,22 @@ handlers:
     # logs. It will clear the undesired initial logs for the next handler
     # (backend) itself.
     level: DEBUG
+    filters:
+      - results
+      - slow
   console:
     class: logging.StreamHandler
     level: INFO
     formatter: normal
-    filters:
-      - slow
 
   file_queue_handler:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.file
     enable_multiprocessing: true
     level: DEBUG
+    filters:
+      - results
+      - mask
   file:
     class: logging.handlers.RotatingFileHandler
     level: INFO
@@ -118,8 +143,6 @@ handlers:
     maxBytes: 104857600
     backupCount: 2
     filename: /tmp/watch.log
-    filters:
-      - mask
 
 loggers:
   pymongo.watcher:

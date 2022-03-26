@@ -138,3 +138,70 @@ class ExecuteFilter(logging.Filter):
             return self._exception_result
 
         return _locals.get("_result", True)
+
+
+class AddFieldAttributes(logging.Filter):
+    _default_attributes = {}
+
+    def __init__(self, name="", field_name="_result", attributes=None):
+        """
+        """
+        super().__init__(name)
+
+        self.main_field_name = field_name
+        self.attributes = attributes or self._default_attributes
+
+    def filter(self, record):
+        """
+        """
+        result = super().filter(record)
+        if not result or not hasattr(record, "watch"):
+            return result
+
+        try:
+            main_field = record.watch[self.main_field_name]
+        except KeyError:
+            return result
+
+        for attr_name, new_name in self.attributes.items():
+            try:
+                value = getattr(main_field, attr_name)
+            except AttributeError:
+                pass
+            else:
+                new_name = new_name or attr_name
+                record.watch[new_name] = value
+
+        return result
+
+
+class AddPymongoResults(AddFieldAttributes):
+    """
+    """
+    _default_attributes = {
+        "matched_count": "MatchedCount",
+        "inserted_count": "InsertedCount",
+        "upserted_count": "UpsertedCount",
+        "modified_count": "ModifiedCount",
+        "deleted_count": "DeletedCount",
+        "inserted_ids": "_InsertedIds",
+    }
+
+    def filter(self, record):
+        """
+        """
+        result = super().filter(record)
+        if not result or not hasattr(record, "watch"):
+            return result
+
+        if "_InsertedIds" in record.watch:
+            record.watch["InsertedCount"] = len(record.watch["_InsertedIds"])
+            record.watch.pop("_InsertedIds", None)
+
+        none_attributes = [attr for attr in self._default_attributes.values()
+                           if record.watch.get(attr) is None]
+        record.watch.default_keys = tuple(
+            i for i in record.watch.default_keys if i not in none_attributes)
+
+        return result
+

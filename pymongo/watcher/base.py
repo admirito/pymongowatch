@@ -6,8 +6,13 @@ inherited from.
 """
 
 import contextlib
+import functools
+import inspect
 import logging.config
 import os
+from datetime import datetime
+
+from .logger import WatchMessage, log
 
 
 class BaseWatchConfigurator(logging.config.BaseConfigurator):
@@ -97,6 +102,8 @@ class BaseWatcher:
     _watch_log_level_final = logging.INFO
     _watch_log_level_timeout = logging.INFO
 
+    _watch_name = __name__
+
     @classmethod
     def watch_dictConfig(cls, config, add_globals=True):
         """
@@ -132,3 +139,167 @@ class BaseWatcher:
         patch/update pymongo internals to disable the watcher
         """
         pass
+
+
+class OperationWatcher(BaseWatcher):
+    watch_operation_result = {
+        "enable": True,
+        "to": "_result",
+        "cast": None,
+    }
+
+    watch_operation_undefined_arguments = {
+        "enable": False,
+    }
+
+    watch_operations = {}
+
+    def _before_operation(
+            self,
+            message,
+            operation_defined_arguments,
+            result_enable,
+            result_field,
+            undefined_arguments_enable,
+            undefined_arguments_cast,
+            operation_arguments):
+        """
+        """
+        for arg_name, arg_spec in operation_defined_arguments.items():
+            if result_enable and arg_name == result_field:
+                continue
+
+            field_name = arg_spec.get("to", arg_name)
+
+            field_value = arg_spec.get("value",
+                                       operation_arguments.get(arg_name))
+
+            cast = arg_spec.get("cast")
+            if cast is not None:
+                with contextlib.suppress(Exception):
+                    field_value = cast(field_value)
+
+            if field_name is not None:
+                message[field_name] = field_value
+
+        if undefined_arguments_enable:
+            for arg_name, arg_value in operation_arguments.items():
+                if arg_name not in operation_defined_arguments:
+                    if undefined_arguments_cast:
+                        with contextlib.suppress(Exception):
+                            arg_value = undefined_arguments_cast(arg_value)
+
+                    message[arg_name] = arg_value
+
+        log(self._watch_name, message, level=self._watch_log_level_first)
+
+    def _after_operation(
+            self,
+            message,
+            result,
+            result_enable,
+            result_field,
+            result_cast):
+        """
+        """
+        if result_enable:
+            result_value = result
+
+            if result_cast:
+                with contextlib.suppress(Exception):
+                    result_value = result_cast(result)
+
+            if result_field is not None:
+                message[result_field] = result_value
+
+        message.finalize()
+
+        log(self._watch_name, message, level=self._watch_log_level_final)
+
+    def _operation(self, operation_name, *args, **kwargs):
+        """
+        """
+        operation_method = getattr(super(), operation_name)
+
+        operation_defined_arguments = self.watch_operations.get(
+            operation_name, {})
+
+        empty = object()
+
+        result_enable = self.watch_operation_result.get("enable", True)
+        result_field = self.watch_operation_result.get("to", "(result)")
+        result_cast = self.watch_operation_result.get("cast")
+        result_value = self.watch_operation_result.get("value", empty)
+        if result_enable:
+            result_spec = operation_defined_arguments.get(result_field, {})
+            result_field = result_spec.get("to", result_field)
+            result_cast = result_spec.get("cast", result_cast)
+            result_value = result_spec.get("value", result_value)
+
+        undefined_arguments_enable = \
+            self.watch_operation_undefined_arguments.get("enable", False)
+        undefined_arguments_cast = \
+            self.watch_operation_undefined_arguments.get("cast")
+
+        message = WatchMessage(
+            EndTime=None,
+            Duration=None,
+            Operation=operation_name)
+
+        message.default_keys = self.watch_default_fields
+
+        message.set_timeout(self._watch_timeout_sec)
+        message.timeout_log_level = self._watch_log_level_timeout
+
+        operation_signature = inspect.signature(operation_method)
+
+        operation_arguments = operation_signature.bind(*args, **kwargs)
+        operation_arguments.apply_defaults()
+        operation_arguments = operation_arguments.arguments
+
+        self._before_operation(
+            message=message,
+            operation_defined_arguments=operation_defined_arguments,
+            result_enable=result_enable,
+            result_field=result_field,
+            undefined_arguments_enable=undefined_arguments_enable,
+            undefined_arguments_cast=undefined_arguments_cast,
+            operation_arguments=operation_arguments,
+        )
+
+        result = None
+
+        _start = message.get("StartTime", datetime.now())
+
+        try:
+            result = operation_method(*args, **kwargs)
+        finally:
+            _end = datetime.now()
+
+            message["Duration"] = (_end - _start).total_seconds()
+            message["EndTime"] = _end
+
+            self._after_operation(
+                message=message,
+                result=result if result_value is empty else result_value,
+                result_enable=result_enable,
+                result_field=result_field,
+                result_cast=result_cast,
+            )
+
+        return result
+
+    def __getattribute__(self, name):
+        if name == "watch_operations":
+            return type(self).watch_operations
+
+        parent_attribute = super().__getattribute__(name)
+
+        if name in self.watch_operations:
+            @functools.wraps(parent_attribute)
+            def new_method(*args, **kwargs):
+                return self._operation(name, *args, **kwargs)
+
+            return new_method
+
+        return parent_attribute
