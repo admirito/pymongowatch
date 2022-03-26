@@ -109,6 +109,22 @@ filters:
           "x" * len(d) if isinstance(d, str) else
           0 if isinstance(d, _numbers.Number) else None)
       Filter = _mask(Filter)
+  restore_original_watcher:
+    (): ext://pymongo.watcher.filters.RestoreOriginalWatcher
+  console_insert_rate:
+    (): ext://pymongo.watcher.filters.RateFilter
+    output_rate_sec: 2
+    enable_multiprocessing: false
+    ignore_intermediates: false
+    attributes:
+      - InsertedCount
+  file_insert_rate:
+    (): ext://pymongo.watcher.filters.RateFilter
+    output_rate_sec: 2
+    enable_multiprocessing: false
+    ignore_intermediates: false
+    attributes:
+      - InsertedCount
 
 handlers:
   console_queue_handler:
@@ -121,7 +137,9 @@ handlers:
     # (backend) itself.
     level: DEBUG
     filters:
+      - restore_original_watcher
       - results
+      - console_insert_rate
       - slow
   console:
     class: logging.StreamHandler
@@ -134,7 +152,9 @@ handlers:
     enable_multiprocessing: true
     level: DEBUG
     filters:
+      - restore_original_watcher
       - results
+      - file_insert_rate
       - mask
   file:
     class: logging.handlers.RotatingFileHandler

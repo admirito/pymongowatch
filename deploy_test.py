@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import inspect
 import logging.handlers
 import logging.config
 import multiprocessing
@@ -32,6 +33,14 @@ def test(mongodb_url):
     client = pymongo.MongoClient(mongodb_url)
     db = client.pywatch
 
+    test_collection(db)
+    test_cursor(db)
+    test_rates(db)
+
+    time.sleep(2)
+
+
+def test_cursor(db):
     it1 = db.pywatch.find()
     [None for _ in zip(range(10), it1)]
 
@@ -72,7 +81,23 @@ def test(mongodb_url):
 
     [None for _ in zip(range(10), it5)]
 
-    time.sleep(pymongo.watcher.WatchCursor._watch_timeout_sec)
+
+def test_collection(db):
+    db.pywatch.delete_many({"a": {"$exists": True}})
+    db.pywatch.insert_many([{"a": i} for i in range(100)])
+    db.pywatch.insert_many([
+        {"b": 1}, {"b": 2}, {"b": 3}, {"b": 4}])
+    db.pywatch.update_many({"b": {"$gte": 3}}, {"$inc": {"b": 10}})
+    db.pywatch.delete_many({"b": {"$exists": True}})
+    db.pywatch.delete_one({"foo": {"$exists": True}})
+
+
+def test_rates(db):
+    for i in range(26):
+        db.pywatch.insert_many([{"c": i} for _ in range(10)])
+        time.sleep(0.25)
+
+    db.pywatch.delete_many({"c": {"$exists": True}})
 
 
 if __name__ == '__main__':
@@ -114,8 +139,17 @@ if __name__ == '__main__':
         import watcher
         sys.path.pop(0)
         pymongo.watcher = watcher
+
         sys.modules["pymongo.watcher"] = watcher
-        watcher.cursor.__name__ = "pymongo.watcher.cursor"
+        for name, attr in watcher.__dict__.items():
+            if inspect.ismodule(attr):
+                full_name = f"pymongo.watcher.{name}"
+                sys.modules[full_name] = attr
+                attr.__name__ = full_name
+
+        watcher.cursor.WatchCursor._watch_name = "pymongo.watcher.cursor"
+        watcher.collection.WatchCollection._watch_name = \
+            "pymongo.watcher.collection"
 
     print(f"deploy tests with {pymongo.__version__=}...",
           file=sys.stderr, flush=True)

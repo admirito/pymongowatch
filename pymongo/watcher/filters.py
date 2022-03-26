@@ -10,6 +10,13 @@ for logging with `pymongo.watcher` logger.
 """
 
 import logging
+import multiprocessing
+import numbers
+import time
+from argparse import Namespace
+from datetime import datetime
+
+from .logger import WatchMessage
 
 
 class ExpressionFilter(logging.Filter):
@@ -205,3 +212,180 @@ class AddPymongoResults(AddFieldAttributes):
 
         return result
 
+
+class RateFilter(logging.Filter):
+    manager = None
+
+    def __init__(self, name="", attributes=None, output_rate_sec=60,
+                 suffix="/s", ignore_nones=True, ignore_intermediates=True,
+                 drop_records=False, clone_watch=True,
+                 enable_multiprocessing=False):
+        """
+        """
+        super().__init__(name)
+
+        self.output_rate_sec = output_rate_sec
+        self.suffix = suffix
+        self.ignore_nones = ignore_nones
+        self.ignore_intermediates = ignore_intermediates
+        self.drop_records = drop_records
+        self.clone_watch = clone_watch
+
+        if enable_multiprocessing:
+            if self.__class__.manager is None:
+                self.__class__.manager = multiprocessing.Manager()
+
+            self.attributes = self.manager.dict()
+
+            # non-finalized records data
+            self._intermediate_records = self.manager.dict()
+
+            self._namespace = self.manager.Namespace()
+        else:
+            self.attributes = {}
+
+            self._intermediate_records = {}
+
+            self._namespace = Namespace()
+
+        for attr in attributes:
+            self.attributes[attr] = 0
+
+        self.__reset_namespace()
+
+    def filter(self, record):
+        """
+        """
+        result = super().filter(record)
+        if not result or not hasattr(record, "watch"):
+            return result
+
+        for attr in self.attributes.keys():
+            if attr in record.watch and (not self.ignore_nones or
+                                         record.watch.get(attr) is not None):
+                break
+        else:
+            # None of the self.attributes are present in the watch
+            # object, so this is an unrelated log that we have to
+            # ignore.
+            return result
+
+        now_datetime = datetime.now()
+        now = now_datetime.timestamp()
+
+        if self.clone_watch:
+            record.original_watch = record.watch
+            record.watch = WatchMessage(record.watch)
+
+        rate_record_is_ready = (
+            record.watch.final and
+            now - self._namespace.last_output_time >=
+            self.output_rate_sec)
+
+        if record.watch.final:
+            self.__update_attributes(record.watch)
+
+        if not self.ignore_intermediates:
+            if record.watch.final:
+                self.__remove_intermediate_record(record.watch)
+            else:
+                self.__add_intermediate_record(record.watch)
+
+        if record.watch.final:
+            record.watch["WatchID"] = self._namespace.watch_id
+
+        self._namespace.iteration += 1
+        record.watch["Iteration"] = self._namespace.iteration
+
+        duration = max(now - self._namespace.last_output_time,
+                       self.output_rate_sec)
+        for attr, value in \
+                self.__total_attributes_with_intermediate_records().items():
+            record.watch[attr] = int(round(value / duration))
+            if self.suffix is not None:
+                record.watch[attr] = f"{record.watch[attr]}{self.suffix}"
+
+        record.watch["Duration"] = duration
+
+        if rate_record_is_ready:
+            record.watch.finalize()
+            record.watch["EndTime"] = now_datetime
+
+            self.__clear_attributes()
+            self.__reset_namespace(now)
+            self._intermediate_records.clear()
+        else:
+            if self.drop_records or not record.watch.final:
+                result = False
+            else:
+                record.watch.set_timeout(
+                    self.output_rate_sec
+                    if self._namespace.last_output_time < 0 else
+                    self.output_rate_sec - (now -
+                                            self._namespace.last_output_time)
+                )
+
+        return result
+
+    def __add_intermediate_record(self, watch):
+        self._intermediate_records[watch.get("WatchID")] = \
+            {attr: watch.get(attr) for attr in self.attributes.keys()}
+
+    def __remove_intermediate_record(self, watch):
+        self._intermediate_records.pop(watch.get("WatchID"), None)
+
+    def __total_attributes_with_intermediate_records(self):
+        result = dict(self.attributes)
+
+        for record in self._intermediate_records.values():
+            increments = self.__get_increments(record)
+            for attr in increments.keys():
+                result[attr] += increments[attr]
+
+        return result
+
+    def __update_attributes(self, watch):
+        increments = self.__get_increments(watch)
+        for attr in self.attributes.keys():
+            self.attributes[attr] += increments[attr]
+
+    def __get_increments(self, watch):
+        result = {}
+
+        for attr in self.attributes.keys():
+            increment = watch.get(attr, 0)
+            if isinstance(increment, numbers.Number):
+                try:
+                    increment = int(increment)
+                except Exception:
+                    increment = 1
+            else:
+                increment = 1
+            result[attr] = increment
+
+        return result
+
+    def __clear_attributes(self):
+        for attr in self.attributes.keys():
+            self.attributes[attr] = 0
+
+    def __reset_namespace(self, now=None):
+        if now is None:
+            now = time.time()
+
+        msg = WatchMessage()
+        self._namespace.watch_id = msg["WatchID"]
+        self._namespace.start_time = msg["StartTime"]
+        self._namespace.iteration = -1
+        self._namespace.last_output_time = now
+
+
+class RestoreOriginalWatcher(logging.Filter):
+    def filter(self, record):
+        """
+        """
+        original_watch = getattr(record, "original_watch", None)
+        if original_watch is not None:
+            record.watch = original_watch
+
+        return super().filter(record)
