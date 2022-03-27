@@ -148,10 +148,24 @@ class ExecuteFilter(logging.Filter):
 
 
 class AddFieldAttributes(logging.Filter):
+    """
+    An extension of :class:`logging.Filter` class to add some context
+    information to the log record. It will extact attributes of a
+    specific field (attribute) of the log record and add them to the
+    log record with the desired name.
+    """
     _default_attributes = {}
 
     def __init__(self, name="", field_name="_result", attributes=None):
         """
+        Initialize a filter based on a field_name and its attributes.
+
+        :Parameters:
+         - `name`: passed to :class:`logging.Filter` initializer
+         - `field_name` (optional): the name of the main attribute to
+           extract its attributes
+         - `attributes` (optional): a mapping of the attributes to
+           extract from the main attribute
         """
         super().__init__(name)
 
@@ -160,6 +174,11 @@ class AddFieldAttributes(logging.Filter):
 
     def filter(self, record):
         """
+        Update the record with the extracted attributes. It will not touch
+        the record if the attributes are not present.
+
+        :Parameters:
+         - `record`: the input :class:`logging.LogRecord` instance
         """
         result = super().filter(record)
         if not result or not hasattr(record, "watch"):
@@ -202,6 +221,19 @@ class AddPymongoResults(AddFieldAttributes):
 
     def filter(self, record):
         """
+        Update the record with the extracted pymongo results
+        attributes. It will not touch the record if the attributes are
+        not present.
+
+        The inserted_ids will be used to determine the "InsertedCount"
+        field.
+
+        It will also replace the record.watch.default_keys tuple by
+        removing the attributes that are None in records that
+        record.watch.final evaluates to True.
+
+        :Parameters:
+         - `record`: the input :class:`logging.LogRecord` instance
         """
         result = super().filter(record)
         if not result or not hasattr(record, "watch"):
@@ -227,6 +259,22 @@ class AddPymongoResults(AddFieldAttributes):
 
 
 class RateFilter(logging.Filter):
+    """
+    Implements a :class:`logging.Filter` derivative that can be used
+    to aggregate logs and add rates information about the specified
+    attributes. It can drop logs (only the ones with the specified
+    attributes) in every "output_rate_sec" seconds, then pass a log
+    with the rates information.
+
+    Note that RateFilter cannot be reused. So for differnet handlers
+    it must be instantiated redundantly.
+
+    Also it is important to note that the RateFilter manipulates
+    attributes such as timeout which are only available in a
+    QueueHandler with WatchQueue. So it must be added to the the
+    QueueHandler not its backend.
+    """
+
     manager = None
 
     def __init__(self, name="", attributes=None, output_rate_sec=60,
@@ -234,6 +282,37 @@ class RateFilter(logging.Filter):
                  drop_records=False, clone_watch=True,
                  enable_multiprocessing=False):
         """
+        Initialize a RateFilter. All the arguments are optional, but
+        wihtout `attributes`, the filter will do nothing more than the
+        :class:`logging.Filter`.
+
+        The attributes value will be added up if it is a
+        number. Otherwise it will be counted for each log.
+
+        It will manipulate the "WatchID" and "Iterator" of the logs to
+        aggregate the related logs.
+
+        :Parameters:
+         - `name`: passed to :class:`logging.Filter` initializer
+         - `attributes`: a list of attributes to be aggregated
+         - `output_rate_sec`: the number of seconds which logs has to
+           be aggreaged
+         - `suffix`: the suffix :class:`str` to be added to the value
+           of each field
+         - `ignore_nones`: if True (the default), if the attribute is
+           present in a log but it's value is None, it will be treated
+           as if it is not present in the log
+         - `ignore_intermediates`: if True (the default) it will
+           ignore log records that their watch message is not
+           finalized
+         - `drop_records`: if True, the :method:`filter` method will
+           return False and drop records that are emitted before the
+           `output_rate_sec` period, otherwise (the default) it will
+           set the timeout of the records
+         - `clone_watch`: clone the watch message and store the
+           original for :class:`RestoreOriginalWatcher` Filter
+         - `enable_multiprocessing`: Use a :mod:`multiprocessing`
+           manager to store rate informations.
         """
         super().__init__(name)
 
@@ -246,6 +325,8 @@ class RateFilter(logging.Filter):
 
         if enable_multiprocessing:
             if self.__class__.manager is None:
+                # Initialize the multiprocessing manager for the first
+                # time
                 self.__class__.manager = multiprocessing.Manager()
 
             self.attributes = self.manager.dict()
@@ -268,6 +349,11 @@ class RateFilter(logging.Filter):
 
     def filter(self, record):
         """
+        Filter records, extract rate information and modify records with
+        rates attributes.
+
+        :Parameters:
+         - `record`: the input :class:`logging.LogRecord` instance
         """
         result = super().filter(record)
         if not result or not hasattr(record, "watch"):
@@ -287,6 +373,7 @@ class RateFilter(logging.Filter):
         now = now_datetime.timestamp()
 
         if self.clone_watch:
+            # Clone the "watch" for RestoreOriginalWatcher filter
             record.original_watch = record.watch
             record.watch = WatchMessage(record.watch)
 
@@ -296,20 +383,31 @@ class RateFilter(logging.Filter):
             self.output_rate_sec)
 
         if record.watch.final:
+            # Non-final records data will be stored in the
+            # self._intermediate_records
             self.__update_attributes(record.watch)
 
         if not self.ignore_intermediates:
             if record.watch.final:
+                # The record.watch is final, but we may have some
+                # information from when it was not final. So to free
+                # duplicate data we have to clear any previous
+                # information about the record.
                 self.__remove_intermediate_record(record.watch)
             else:
                 self.__add_intermediate_record(record.watch)
 
         if record.watch.final:
+            # Replace the record's WatchID, so all the aggreaged logs
+            # treated as one. Non-final records will be droped. For
+            # more information, read the comments below when we drop
+            # them.
             record.watch["WatchID"] = self._namespace.watch_id
 
         self._namespace.iteration += 1
         record.watch["Iteration"] = self._namespace.iteration
 
+        # Update the record attributes with rate information
         duration = max(now - self._namespace.last_output_time,
                        self.output_rate_sec)
         for attr, value in \
@@ -329,6 +427,11 @@ class RateFilter(logging.Filter):
             self._intermediate_records.clear()
         else:
             if self.drop_records or not record.watch.final:
+                # We have to drop non-final records anyway, because an
+                # operation may start before "output_rate_sec" and
+                # finish after it. So we have to use different
+                # WatchIDs for them, otherwise we may end up
+                # aggregating rates from different periods.
                 result = False
             else:
                 record.watch.set_timeout(
@@ -423,9 +526,15 @@ class RestoreOriginalWatcher(logging.Filter):
 
     def filter(self, record):
         """
+        Restore the "watch" attribute of the `record` to its
+        "original_watch".
+
+        :Parameters:
+         - `record`: the input :class:`logging.LogRecord` instance
         """
         original_watch = getattr(record, "original_watch", None)
         if original_watch is not None:
             record.watch = original_watch
+            del record.original_watch
 
         return super().filter(record)

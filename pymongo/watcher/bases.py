@@ -25,11 +25,16 @@ class BaseWatchConfigurator(logging.config.BaseConfigurator):
     """
     def configure_watch_global(self, cls, sub_section="global"):
         """
-        Apply configurations from "global" section to `cls` i.e. a watcher
-        class.
+        Apply common configurations from `sub_section` of the "watchers"
+        section of the configuration to `cls` i.e. a watcher class.
+
+        Currently, "timeout_sec", "log_level", "default_keys" and
+        "csv" are supported.
 
         :Parameters:
-         - cls: the watcher class
+         - `cls`: the watcher class
+         - `sub_section` (optional): the name of a sub section in the
+           "watchers" section.
         """
         config = self.config
 
@@ -162,6 +167,11 @@ class BaseWatcher:
 
 
 class OperationWatcherConfigurator(BaseWatchConfigurator):
+    """
+    An extension of OperationWatcherConfigurator to add support for
+    :class:`OperationWatcher` configurations.
+    """
+
     def configure_watch_operation_field(self, config):
         """
         Given a dictionary `config` i.e. the definition for a field (an
@@ -199,6 +209,9 @@ class OperationWatcherConfigurator(BaseWatchConfigurator):
 
 class UnsetType:
     """
+    An immutable singleton type that is used in
+    :class:`OperationField` to distinguish between a field with `None`
+    value and a field which has not set on definition.
     """
     __instance = None
 
@@ -218,6 +231,14 @@ Unset = UnsetType()
 @dataclasses.dataclass
 class OperationField:
     """
+    A :class:`dataclasses.dataclass`, to store operations log fields
+    specification. Each field usually is extracted from an operation
+    argument or its result.
+
+    Data Attributes:
+     - `to`: name of the field
+     - `cast`: a function that can tranform a value
+     - `value`: used to override the filed value
     """
     to: Union[None, UnsetType, str] = Unset
     cast: Optional[Callable[[Any], Any]] = None
@@ -226,6 +247,37 @@ class OperationField:
 
 class OperationWatcher(BaseWatcher):
     """
+    A :class:`BaseWatcher` extension that could be used as a mix-in
+    parent for a python class that implements some operations that has
+    to be watched.
+
+    `watch_operations` attribute of the class will specify the
+    operations that has to be watched. It is a dictionary in which the
+    keys are the class methods (operations to be watched) and each
+    value (a dictionary itself) specifies the arguments of the
+    operation that has to be added as a field to the generated log for
+    the operation.
+
+    The arguments dictionary keys are the name of the arguments of the
+    operation (the method) or a special key for the result of the
+    operation. The result special key itself is specified in the
+    `watch_operation_result` class attribute.
+
+    The arguments dictionary values must be an instance of
+    :class:`OperationField` class.
+
+    `watch_operation_result` is also an :class:`OperationField`
+    instance, which will specify how the result of all the operations
+    has to be logged. The specified "to" name can later be customized
+    for each operation and it defaults to the name "_result".
+
+    By default, arguments of an operation, not defined in the
+    `watch_operations` will not be added to the emitted
+    logs. `watch_operation_undefined_arguments` an instance of
+    :class:`OperationField` as well can be used to determine if the
+    undefined arguments in `watch_operations` should be added to the
+    logs or not. If its "to" value is `Unset` then the undefined
+    arguemtns will be added with their original name to the log.
     """
 
     watch_operation_result = OperationField(to="_result")
@@ -242,7 +294,22 @@ class OperationWatcher(BaseWatcher):
             undefined_arguments_field,
             operation_arguments):
         """
+        Emit a log indicating an operation has begun.
+
+        Parameters:
+         - `message`: the :class:`pymongo.watcher.logger.WatchMessage`
+           instance of the log
+         - `operation_defined_arguments`: a :class:`dict` with the
+           arguments specifications for the ongoing operation.
+         - `result_field`: a :class:`OperationField` to specify the
+           result key
+         - `undefined_arguments_field`: a :class:`OperationField` to
+           determine to add the undefined arguments to the log or not
+         - `operation_arguments`: a :class:`dict` with real values the
+           operation has called with, which will be used to set values
+           for the fields in the watcher log
         """
+        # Add defined arguments to the message
         for arg_name, arg_spec in operation_defined_arguments.items():
             if result_field.to is not Unset and arg_name == result_field.to:
                 continue
@@ -252,17 +319,25 @@ class OperationWatcher(BaseWatcher):
             field_value = operation_arguments.get(arg_name) \
                 if arg_spec.value is Unset else arg_spec.value
 
+            # We will always call the cast function even if the
+            # field_name is evaluated as False, as the cast function
+            # may have some intended side-effects
             cast = arg_spec.cast
             if cast is not None:
+                # Ignore any errors in the casting
                 with contextlib.suppress(Exception):
                     field_value = cast(field_value)
 
             if field_name:
                 message[field_name] = field_value
 
+        # Add undefined arguemtns to the message if it is requested
         if undefined_arguments_field.to is not None:
             for arg_name, arg_value in operation_arguments.items():
                 if arg_name not in operation_defined_arguments:
+                    # If undefined_arguments_field.to is empty stirng
+                    # we call the cast (for its side-effects but we
+                    # will omit the argument)
                     if undefined_arguments_field.cast is not None:
                         with contextlib.suppress(Exception):
                             arg_value = undefined_arguments_field.cast(
@@ -281,12 +356,23 @@ class OperationWatcher(BaseWatcher):
             result_field,
             result):
         """
+        Emit a log indicating an operation has finished.
+
+        Parameters:
+         - `message`: the :class:`pymongo.watcher.logger.WatchMessage`
+           instance of the log
+         - `result_field`: a :class:`OperationField` to specify the
+           result key (and its cast, etc.)
+         - `result`: the real value of the result of the operation
+           that will be added to the watch log
         """
         if result_field.to is Unset:
             result_field = dataclasses.replace(result_field, to="(result)")
 
         result_value = result
 
+        # We have to always call the cast as it may have intended
+        # side-effects
         if result_field.cast:
             with contextlib.suppress(Exception):
                 result_value = result_field.cast(result)
@@ -300,6 +386,18 @@ class OperationWatcher(BaseWatcher):
 
     def _operation(self, operation_name, *args, **kwargs):
         """
+        Given an `operation_name` i.e. name of a method in the class, it
+        will call it with *args and **kwargs.
+
+        A :class:`pymongo.watcher.logger.WatchMessage` will be created
+        and the :meth:`_before_operation` and :meth:`_after_operation`
+        will be called before and after calling the method to emit the
+        watcher logs.
+
+        Parameters:
+         - `operation_name`: the name of the class method
+         - `*args`: the positional arguments for the method
+         - `**kwargs`: the keyword arguments for the method
         """
         operation_method = getattr(super(), operation_name)
 
@@ -351,6 +449,14 @@ class OperationWatcher(BaseWatcher):
         return result
 
     def __getattribute__(self, name):
+        """
+        Patch methods defined in :attr:`watch_operations` attribute of the
+        class to be called with :method:`_operation` method to emit
+        operation logs.
+
+        Parameters:
+         - `name`: name of the attribute
+        """
         if name == "watch_operations":
             return type(self).watch_operations
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 """
+This module implements :class:`WatchCollection` a
+:class:`pymongo.collection.Collection` replacement which will emit
+logs on each database operations.
 """
 
 import contextlib
@@ -13,6 +16,9 @@ from .transforms import one_if_not_none
 
 class WatchCollection(OperationWatcher, pymongo.collection.Collection):
     """
+    A replacement for :class:`pymongo.collection.Collection` which will
+    use :class:`pymongo.watcher.bases.OperationWatcher` to emit logs
+    for each operation.
     """
 
     watch_default_fields = (
@@ -54,10 +60,13 @@ class WatchCollection(OperationWatcher, pymongo.collection.Collection):
 
     def _before_operation(self, message, *args, **kwargs):
         """
+        Calls the parent :class:`pymongo.watcher.bases.OperationWatcher`
+        _before_operation to emit the log but it patch the `message`
+        and add pymongo collection specific fields.
         """
         message["DB"] = self.database.name
         message["Collection"] = self.name
-        super()._before_operation(message, *args, **kwargs)
+        return super()._before_operation(message, *args, **kwargs)
 
     @classmethod
     def watch_dictConfig(cls, config, add_globals=True):
@@ -87,7 +96,10 @@ class WatchCollection(OperationWatcher, pymongo.collection.Collection):
 
         cls.__real_pymongo_collection = pymongo.collection.Collection
 
-        # pymongo.collection.Collection = cls
+        # We shall not patch Collection in pymongo.collection because
+        # the Database class will creates a WatchCollection. The its
+        # __init__ will call super(Collection, self).__init__ which
+        # will be WatchCollection.
         pymongo.database.Collection = cls
 
     @classmethod
@@ -98,5 +110,4 @@ class WatchCollection(OperationWatcher, pymongo.collection.Collection):
         super().watch_unpatch_pymongo()
 
         with contextlib.suppress(AttributeError):
-            # pymongo.collection.Collection = cls.__real_pymongo_collection
             pymongo.database.Collection = cls.__real_pymongo_collection
