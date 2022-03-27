@@ -184,6 +184,12 @@ class AddFieldAttributes(logging.Filter):
 
 class AddPymongoResults(AddFieldAttributes):
     """
+    A filter based on :class:`AddFieldAttributes` which will inspect
+    "_result" field, if it has attributes like `pymongo result classes
+    <https://pymongo.readthedocs.io/en/stable/api/pymongo/results.html>`_,
+    it will replace "_result" with the related "MatchedCount",
+    "InsertedCount", "UpsertedCount", "ModifiedCount" or
+    "DeletedCount".
     """
     _default_attributes = {
         "matched_count": "MatchedCount",
@@ -388,6 +394,33 @@ class RateFilter(logging.Filter):
 
 
 class RestoreOriginalWatcher(logging.Filter):
+    """
+    Python logging filters may change attributes in a log record as
+    described in `the documentations
+    <https://docs.python.org/3/library/logging.html#filter-objects>`_.
+    Nevertheless, if you use different handlers with different
+    filters, logging system will pass the same modified record to all
+    the handlers, thus a filter can have side effects on other
+    handlers as well.
+
+    For example, :class:`RateFilter` will update logs to only contain
+    information about the rates and it will discard other fields of a
+    log, but you may want to use those discarded values in other
+    handlers without a RateFilter.
+
+    To overcome this problem, :class:`RateFilter` will sotre the
+    original context information ("watch") in the log record (in a
+    variable named "original_watch"). :class:`RestoreOriginalWatcher`
+    filter will restore the conext information to its original state
+    to make sure :class:`RateFilter` used in other handlers will not
+    affect the handler :class:`RestoreOriginalWatcher` is attached to.
+
+    It is important to use the :class:`RestoreOriginalWatcher` before
+    all the filters that use the "watch" context, so other filters can
+    use the original context information after it is restored to its
+    original state.
+    """
+
     def filter(self, record):
         """
         """

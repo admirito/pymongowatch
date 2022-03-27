@@ -218,39 +218,6 @@ filters:
           "x" * len(d) if isinstance(d, str) else
           0 if isinstance(d, _numbers.Number) else None)
       Filter = _mask(Filter)
-  results:
-    ## AddPymongoResults will inspect "_result" field, if it has
-    ## attributes like pymongo result classes (
-    ## https://pymongo.readthedocs.io/en/stable/api/pymongo/results.html
-    ## ), it will replace "_result" with the related "MatchedCount",
-    ## "InsertedCount", "UpsertedCount", "ModifiedCount" or
-    ## "DeletedCount".
-    (): ext://pymongo.watcher.filters.AddPymongoResults
-  restore_original_watcher:
-    ## Python logging filters may change attributes in a log record as
-    ## described in the documentations:
-    ## https://docs.python.org/3/library/logging.html#filter-objects .
-    ## Nevertheless, if you use different handlers with different
-    ## filters, logging system will pass the same modified record to
-    ## all the handlers, thus a filter can have side effects on other
-    ## handlers as well.
-    ##
-    ## For example, RateFilter will update logs to only contain
-    ## information about the rates and it will discard other fields of
-    ## a log, but you may want to use those discarded values in other
-    ## handlers without a RateFilter.
-    ##
-    ## To overcome this problem, RateFilter will sotre the original
-    ## context information ("watch") in the log record (in a variable
-    ## named "original_watch"). RestoreOriginalWatcher filter will
-    ## restore the conext information to its original state to make
-    ## sure RateFilter used in other handlers will not affect the
-    ## handler RestoreOriginalWatcher is attached to.
-    ##
-    ## It is important to use the RestoreOriginalWatcher as the first
-    ## filter of a handler, so other filters can use the original
-    ## context information, too.
-    (): ext://pymongo.watcher.filters.RestoreOriginalWatcher
   console_insert_rate:
     ## RateFilter can be used to aggregate logs and add rates
     ## information about the specified attributes. It will drop logs
@@ -295,8 +262,6 @@ handlers:
     ## filters to the QueueHandler as it is usually better for
     ## performance.
     filters:
-      - restore_original_watcher
-      - results
       - console_insert_rate
       - slow
   console:
@@ -310,8 +275,6 @@ handlers:
     enable_multiprocessing: true
     level: DEBUG
     filters:
-      - restore_original_watcher
-      - results
       - file_insert_rate
       - mask
   file:
