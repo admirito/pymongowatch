@@ -25,7 +25,7 @@ from datetime import datetime
 
 import pymongo
 
-from .base import BaseWatcher
+from .bases import BaseWatcher
 from .logger import WatchMessage, log
 
 

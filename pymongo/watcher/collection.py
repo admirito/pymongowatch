@@ -7,7 +7,7 @@ import contextlib
 
 import pymongo
 
-from .base import OperationWatcher, OperationField
+from .bases import OperationWatcher, OperationField
 from .transforms import one_if_not_none
 
 
