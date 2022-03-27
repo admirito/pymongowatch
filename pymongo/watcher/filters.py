@@ -205,10 +205,17 @@ class AddPymongoResults(AddFieldAttributes):
             record.watch["InsertedCount"] = len(record.watch["_InsertedIds"])
             record.watch.pop("_InsertedIds", None)
 
-        none_attributes = [attr for attr in self._default_attributes.values()
-                           if record.watch.get(attr) is None]
-        record.watch.default_keys = tuple(
-            i for i in record.watch.default_keys if i not in none_attributes)
+        if record.watch.final:
+            # If a message is in its final state and it has None
+            # values for pymongo results, it was probably never
+            # intended to have such results so we can remove the
+            # entire None-valued fields from the default keys.
+            none_attributes = [
+                attr for attr in self._default_attributes.values()
+                if record.watch.get(attr) is None]
+            record.watch.default_keys = tuple(
+                i for i in record.watch.default_keys
+                if i not in none_attributes)
 
         return result
 

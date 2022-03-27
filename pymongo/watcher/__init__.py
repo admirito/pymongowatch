@@ -54,7 +54,7 @@ def dictConfig(config):
     :Parameters:
      - config: configuration dictionary
     """
-    WatchCollection.watch_dictConfig(config, add_globals=True)
+    WatchCollection.watch_dictConfig(config)
     WatchCursor.watch_dictConfig(config)
 
 

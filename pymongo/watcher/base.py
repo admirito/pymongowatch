@@ -6,11 +6,13 @@ inherited from.
 """
 
 import contextlib
+import dataclasses
 import functools
 import inspect
 import logging.config
 import os
 from datetime import datetime
+from typing import Any, Callable, Optional, Union
 
 from .logger import WatchMessage, log
 
@@ -21,7 +23,7 @@ class BaseWatchConfigurator(logging.config.BaseConfigurator):
     adds methods for "watchers" configuration with
     :func:`pymongo.watcher.dictConfig` method.
     """
-    def configure_watch_global(self, cls):
+    def configure_watch_global(self, cls, sub_section="global"):
         """
         Apply configurations from "global" section to `cls` i.e. a watcher
         class.
@@ -31,19 +33,29 @@ class BaseWatchConfigurator(logging.config.BaseConfigurator):
         """
         config = self.config
 
-        _global = config.get("watchers", {}).get("global", {})
+        section = config.get("watchers", {}).get(sub_section, {})
 
         with contextlib.suppress(Exception):
-            cls._watch_timeout_sec = int(_global["timeout_sec"])
+            cls._watch_timeout_sec = int(section["timeout_sec"])
 
-        log_level = _global.get("log_level", {})
+        log_level = section.get("log_level", {})
         levels = self.configure_watch_log_level(log_level)
         for log_type in ["first", "update", "final", "timeout"]:
             with contextlib.suppress(KeyError):
                 setattr(cls, f"_watch_log_level_{log_type}", levels[log_type])
 
+        try:
+            default_fields = tuple(key for key in
+                                   section.get("default_fields", [])
+                                   if key in cls.watch_all_fields)
+        except Exception:
+            default_fields = ()
+
+        if default_fields:
+            cls.watch_default_fields = default_fields
+
         with contextlib.suppress(Exception):
-            for csv_item in _global.get("csv", []):
+            for csv_item in section.get("csv", []):
                 file_name = self.convert(csv_item.get("file"))
                 headers = csv_item.get("add_headers_if_empty")
 
@@ -105,24 +117,32 @@ class BaseWatcher:
     _watch_name = __name__
 
     @classmethod
-    def watch_dictConfig(cls, config, add_globals=True):
+    def watch_dictConfig(cls, config, sub_section=None, add_globals=True):
         """
         Configure the watcher using a dictionary. Similar to
         :func:`logging.config.dictConfig`. The configuration will be
         extracted from the the "watchers" key in the `config`
         dictionary. The base class only implements the "global"
         section. The extended classes should implement their own
-        sections.
+        sections, but if `sub_section` is provided the common
+        configuration applicable to all the watchers will be
+        configured for the given sub-section.
 
         :Parameters:
-         - config: configuration dictionary
-         - add_globals (optional): A boolean indicating weather to
+         - `config`: configuration dictionary
+         - `add_globals` (optional): A boolean indicating weather to
            load the "global" section or not.
+         - `sub_section` (optional): Name of a sub-section in the
+           watchers section to load the common configurations
         """
         cls._watch_configurtor = BaseWatchConfigurator(config)
 
         if add_globals:
             cls._watch_configurtor.configure_watch_global(cls)
+
+        if sub_section is not None:
+            cls._watch_configurtor.configure_watch_global(
+                cls, sub_section=sub_section)
 
     @classmethod
     def watch_patch_pymongo(cls):
@@ -141,16 +161,76 @@ class BaseWatcher:
         pass
 
 
-class OperationWatcher(BaseWatcher):
-    watch_operation_result = {
-        "enable": True,
-        "to": "_result",
-        "cast": None,
-    }
+class OperationWatcherConfigurator(BaseWatchConfigurator):
+    def configure_watch_operation_field(self, config):
+        """
+        Given a dictionary `config` i.e. the definition for a field (an
+        operation argument, result or general definition for undefined
+        fields) this method will return the equivalent
+        :class:`OperationField`.
 
-    watch_operation_undefined_arguments = {
-        "enable": False,
-    }
+        "log_level" section of
+        "watchers", this method will return a mapping from all the
+        given keys in the dictionary to the resolved log level.
+
+        For example, if `config` is {"cast": "builtins.len"} the
+        :class:`OperationField` result object will have the
+        :func:`len` as the cast.
+
+        :Parameters:
+         - config: the field definition dictionary in the configuration
+        """
+        result = OperationField()
+
+        with contextlib.suppress(Exception):
+            result.to = self.convert(config["to"])
+
+        with contextlib.suppress(Exception):
+            cast = self.convert(config["cast"])
+            if isinstance(cast, str):
+                cast = self.resolve(cast)
+            result.cast = cast
+
+        with contextlib.suppress(Exception):
+            result.value = self.convert(config["value"])
+
+        return result
+
+
+class UnsetType:
+    """
+    """
+    __instance = None
+
+    def __new__(cls):
+        if cls.__instance is None:
+            cls.__instance = super().__new__(cls)
+
+        return cls.__instance
+
+    def __repr__(self):
+        return "<Unset>"
+
+
+Unset = UnsetType()
+
+
+@dataclasses.dataclass
+class OperationField:
+    """
+    """
+    to: Union[None, UnsetType, str] = Unset
+    cast: Optional[Callable[[Any], Any]] = None
+    value: Any = Unset
+
+
+class OperationWatcher(BaseWatcher):
+    """
+    """
+
+    watch_operation_result = OperationField(to="_result")
+
+    watch_operation_undefined_arguments = OperationField(to="")
 
     watch_operations = {}
 
@@ -158,59 +238,61 @@ class OperationWatcher(BaseWatcher):
             self,
             message,
             operation_defined_arguments,
-            result_enable,
             result_field,
-            undefined_arguments_enable,
-            undefined_arguments_cast,
+            undefined_arguments_field,
             operation_arguments):
         """
         """
         for arg_name, arg_spec in operation_defined_arguments.items():
-            if result_enable and arg_name == result_field:
+            if result_field.to is not Unset and arg_name == result_field.to:
                 continue
 
-            field_name = arg_spec.get("to", arg_name)
+            field_name = arg_name if arg_spec.to is Unset else arg_spec.to
 
-            field_value = arg_spec.get("value",
-                                       operation_arguments.get(arg_name))
+            field_value = operation_arguments.get(arg_name) \
+                if arg_spec.value is Unset else arg_spec.value
 
-            cast = arg_spec.get("cast")
+            cast = arg_spec.cast
             if cast is not None:
                 with contextlib.suppress(Exception):
                     field_value = cast(field_value)
 
-            if field_name is not None:
+            if field_name:
                 message[field_name] = field_value
 
-        if undefined_arguments_enable:
+        if undefined_arguments_field.to is not None:
             for arg_name, arg_value in operation_arguments.items():
                 if arg_name not in operation_defined_arguments:
-                    if undefined_arguments_cast:
+                    if undefined_arguments_field.cast is not None:
                         with contextlib.suppress(Exception):
-                            arg_value = undefined_arguments_cast(arg_value)
+                            arg_value = undefined_arguments_field.cast(
+                                arg_value)
 
-                    message[arg_name] = arg_value
+                    arg_name = arg_name if undefined_arguments_field.to is \
+                        Unset else undefined_arguments_field.to
+                    if arg_name:
+                        message[arg_name] = arg_value
 
         log(self._watch_name, message, level=self._watch_log_level_first)
 
     def _after_operation(
             self,
             message,
-            result,
-            result_enable,
             result_field,
-            result_cast):
+            result):
         """
         """
-        if result_enable:
-            result_value = result
+        if result_field.to is Unset:
+            result_field = dataclasses.replace(result_field, to="(result)")
 
-            if result_cast:
-                with contextlib.suppress(Exception):
-                    result_value = result_cast(result)
+        result_value = result
 
-            if result_field is not None:
-                message[result_field] = result_value
+        if result_field.cast:
+            with contextlib.suppress(Exception):
+                result_value = result_field.cast(result)
+
+        if result_field.to:
+            message[result_field.to] = result_value
 
         message.finalize()
 
@@ -223,23 +305,6 @@ class OperationWatcher(BaseWatcher):
 
         operation_defined_arguments = self.watch_operations.get(
             operation_name, {})
-
-        empty = object()
-
-        result_enable = self.watch_operation_result.get("enable", True)
-        result_field = self.watch_operation_result.get("to", "(result)")
-        result_cast = self.watch_operation_result.get("cast")
-        result_value = self.watch_operation_result.get("value", empty)
-        if result_enable:
-            result_spec = operation_defined_arguments.get(result_field, {})
-            result_field = result_spec.get("to", result_field)
-            result_cast = result_spec.get("cast", result_cast)
-            result_value = result_spec.get("value", result_value)
-
-        undefined_arguments_enable = \
-            self.watch_operation_undefined_arguments.get("enable", False)
-        undefined_arguments_cast = \
-            self.watch_operation_undefined_arguments.get("cast")
 
         message = WatchMessage(
             EndTime=None,
@@ -260,10 +325,8 @@ class OperationWatcher(BaseWatcher):
         self._before_operation(
             message=message,
             operation_defined_arguments=operation_defined_arguments,
-            result_enable=result_enable,
-            result_field=result_field,
-            undefined_arguments_enable=undefined_arguments_enable,
-            undefined_arguments_cast=undefined_arguments_cast,
+            result_field=self.watch_operation_result,
+            undefined_arguments_field=self.watch_operation_undefined_arguments,
             operation_arguments=operation_arguments,
         )
 
@@ -281,10 +344,8 @@ class OperationWatcher(BaseWatcher):
 
             self._after_operation(
                 message=message,
-                result=result if result_value is empty else result_value,
-                result_enable=result_enable,
-                result_field=result_field,
-                result_cast=result_cast,
+                result_field=self.watch_operation_result,
+                result=result,
             )
 
         return result
@@ -303,3 +364,44 @@ class OperationWatcher(BaseWatcher):
             return new_method
 
         return parent_attribute
+
+    @classmethod
+    def watch_dictConfig(cls, config, sub_section=None, add_globals=True):
+        """
+        Extends the `watch_dictConfig` method in :class:`BaseWatcher` to
+        also load the `result`, `undefined_arguments` and `operations`
+        field definitions from the provided `sub_section`.
+
+        :Parameters:
+         - `config`: configuration dictionary
+         - `add_globals` (optional): A boolean indicating weather to
+           load the "global" section or not.
+         - `sub_section` (optional): Name of a sub-section in the
+           watchers section to load the configurations
+        """
+        super().watch_dictConfig(config, sub_section=sub_section,
+                                 add_globals=add_globals)
+
+        cls._watch_configurtor = OperationWatcherConfigurator(config)
+
+        if sub_section is None:
+            return
+
+        section = config.get("watchers", {}).get(sub_section, {})
+
+        result = section.get("result")
+        if result is not None:
+            cls.watch_operation_result = \
+                cls._watch_configurtor.configure_watch_operation_field(result)
+
+        undefined_arguments = section.get("undefined_arguments")
+        if undefined_arguments is not None:
+            cls.watch_operation_undefined_arguments = \
+                cls._watch_configurtor.configure_watch_operation_field(
+                    undefined_arguments)
+
+        for operation, args in section.get("operations", {}).items():
+            for arg, spec in args.items():
+                cls.watch_operations.setdefault(operation, {})[arg] = \
+                    cls._watch_configurtor.configure_watch_operation_field(
+                        spec)

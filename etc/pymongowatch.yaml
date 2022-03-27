@@ -1,78 +1,177 @@
-# Configuration for pymongowatch
-#
-# The configuration must be compatible with the python logging
-# dictConfig schema; described in here:
-# https://docs.python.org/3/library/logging.config.html#dictionary-schema-details
+## Configuration for pymongowatch
+##
+## The configuration must be compatible with the python logging
+## dictConfig schema; described in here:
+## https://docs.python.org/3/library/logging.config.html#dictionary-schema-details
 
 version: 1
 
 watchers:
-  # Global configuration for all the watcher classes
+  ## Global configuration for all the watcher classes
   global:
-    # The default timeout for an operation before sending a log
+    ## The default timeout for an operation before sending a log
     timeout_sec: 10
 
-    # The emit log level for each type of log, "first" for when an
-    # operation begins, "update" for when we have new information
-    # about the started operation, "final" for when the operation has
-    # finished, and "timeout" for when an operation times out.
-    #
-    # Make sure that log level for all the related loggers and all the
-    # QueueHandlers are equal or lower than the lowest log level among
-    # all the log types here. Otherwise new information could not be
-    # fed to the QueueHandler.
-    #
-    # Also you can use cfg:// prefixed url-like values for each log
-    # level to reference other values inside the configuration file.
+    ## The emit log level for each type of log, "first" for when an
+    ## operation begins, "update" for when we have new information
+    ## about the started operation, "final" for when the operation has
+    ## finished, and "timeout" for when an operation times out.
+    ##
+    ## Make sure that log level for all the related loggers and all
+    ## the QueueHandlers are equal or lower than the lowest log level
+    ## among all the log types here. Otherwise new information could
+    ## not be fed to the QueueHandler.
+    ##
+    ## Also you can use cfg:// prefixed url-like values for each log
+    ## level to reference other values inside the configuration file.
     log_level:
       first: DEBUG
       update: DEBUG
       final: INFO
       timeout: INFO
 
-    # In this section you can add CSV column names to the given
-    # files. The columns will be added as the first line of the file
-    # only if the file is empty.
-    #
-    # Using cfg:// url-like values you can add a header to the files
-    # for the defined file log handlers.
+    ## In this section you can add CSV column names to the given
+    ## files. The columns will be added as the first line of the file
+    ## only if the file is empty.
+    ##
+    ## Using cfg:// url-like values you can add a header to the files
+    ## for the defined file log handlers.
     csv:
       - file: cfg://handlers.file.filename
         add_headers_if_empty: "WatcherName,{watch.csv}"
 
+    ## Default fields for "{watch}" template in log format
+    default_fields:
+      - DB
+      - Collection
+      - Operation
+      - Filter
+      - Duration
+      - MatchedCount
+      - InsertedCount
+      - UpsertedCount
+      - ModifiedCount
+      - DeletedCount
+
+  ## collection operations logs. The releated global section
+  ## configuration such as "timeout_sec" and "log level" could be
+  ## overridden here.
   collection:
     # timeout_sec: 10
 
-    # log_level:
-    #   final: INFO
+    log_level:
+      final: INFO
 
-    # default_fields:
-    #   - DB
-    #   - Collection
-    #   - Operation
-    #   - Filter
-    #   - Duration
-    #   - MatchedCount
-    #   - InsertedCount
-    #   - UpsertedCount
-    #   - ModifiedCount
-    #   - DeletedCount
+    ## The following sections defines fields for each operation. Each
+    ## definition can contain three keys.
+    ##
+    ## "to" specifies the field name and if omitted it defaults to the
+    ## argument name of the operation or "(result)" for the operation
+    ## result. If set to null, the filed will be removed.
+    ##
+    ## "cast" if specified, could be function which should accept a
+    ## single argument. The filed value will be passed to this
+    ## function and its result will be used as the value of the field.
+    ##
+    ## "value" can be used to override the value of an argument. You
+    ## can also use non-existant argument names for an operation with
+    ## a "value" to add any desired custom fields for each operation.
 
-  # cursor releated logs. The releated global section configuration
-  # such as "timeout_sec" and "log level" could be overridden here.
+    ## collection operations can be defined/customized here to be
+    ## logged with the specified fileds. You can specify the arguments
+    ## to be stored in the logs as fields. The "_result" (which is
+    ## specified in the "result" section) could also be used to
+    ## customize the operation result in the log.
+    ##
+    # operations:
+    #   aggregate:
+    #     pipeline:
+    #       to: Filter
+    #   bulk_write:
+    #     requests:
+    #       to: MatchedCount
+    #       cast: builtins.len
+    #   count_documents:
+    #     _result:
+    #       to: MatchedCount
+    #   delete_many:
+    #     filter:
+    #       to: Filter
+    #   delete_one:
+    #     filter:
+    #       to: Filter
+    #   distinct:
+    #     _result:
+    #       to: MatchedCount
+    #       cast: builtins.len
+    #   estimated_document_count:
+    #     _result:
+    #       to: MatchedCount
+    #   find_one:
+    #     _result:
+    #       to: MatchedCount
+    #       cast: pymongo.watcher.transforms.one_if_not_none
+    #   find_one_and_delete:
+    #     _result:
+    #       to: DeletedCount
+    #       cast: pymongo.watcher.transforms.one_if_not_none
+    #   find_one_and_replace:
+    #     _result:
+    #       cast: pymongo.watcher.transforms.one_if_not_none
+    #       to: ModifiedCount
+    #   find_one_and_update:
+    #     _result:
+    #       to: ModifiedCount
+    #       cast: pymongo.watcher.transforms.one_if_not_none
+    #   insert_many:
+    #     documents:
+    #       to: InsertedCount
+    #       cast: builtins.len
+    #   insert_one:
+    #     _result:
+    #       to: InsertedCount
+    #       value: 1
+    #   replace_one:
+    #     filter:
+    #       to: Filter
+    #   update_many:
+    #     filter:
+    #       to: Filter
+    #   update_one:
+    #     filter:
+    #       to: Filter
+
+    ## The result of each operation can be stored in the desired key
+    ## defined in "to", although "AddPymongoResults" filter will
+    ## expect it to be "_result".
+    ##
+    # result:
+    #   to: _result
+    #   cast:
+
+    ## If "undefined_arguments" is defined without "to", all the
+    ## undefined arguments in the "operations" section will be added
+    ## to the log. But if "to" is set to null, they will not be added
+    ## to the operation log.
+    ##
+    # undefined_arguments:
+    #   to: null
+
+  ## cursor releated logs. The releated global section configuration
+  ## such as "timeout_sec" and "log level" could be overridden here.
   cursor:
     timeout_sec: 15
 
-    # log_level:
-    #   final: INFO
+    log_level:
+      final: INFO
 
-    # Only emit cursor update logs when the retrieved count has
-    # changed. This could significantly reduce inter-process
-    # communications in a multiprocessing environment.
+    ## Only emit cursor update logs when the retrieved count has
+    ## changed. This could significantly reduce inter-process
+    ## communications in a multiprocessing environment.
     emit_on_new_retrieves: true
 
-    # Default fields for "{watch}" template in log format for the
-    # cursors
+    ## Default fields for "{watch}" template in log format for the
+    ## cursors
     default_fields:
       - DB
       - Collection
@@ -93,13 +192,23 @@ formatters:
     style: "{"
 
 filters:
-  results:
-    (): ext://pymongo.watcher.filters.AddPymongoResults
   slow:
+    ## The ExpressionFilter can be defined with any python expression
+    ## to filter the logs. Log fields are available as variables. Here
+    ## is an example to filter only logs from "pywatch" collection
+    ## which their Duration is more than a specified value.
     (): ext://pymongo.watcher.filters.ExpressionFilter
     expression: |
       Collection == "pywatch" and Duration > 0.00001
   mask:
+    ## The ExecuteFilter is the more general form of an
+    ## ExpressionFilter. You can execute arbitrary python code and
+    ## update each log field. The special _result boolean variable if
+    ## set, will be used to decide to filter a log or not and it
+    ## defaults to True and will not filter a log.
+    ##
+    ## The following example will mask values in the "Filter" field
+    ## with the recursive function "_mask".
     (): ext://pymongo.watcher.filters.ExecuteFilter
     execute: |
       import numbers as _numbers
@@ -109,20 +218,65 @@ filters:
           "x" * len(d) if isinstance(d, str) else
           0 if isinstance(d, _numbers.Number) else None)
       Filter = _mask(Filter)
+  results:
+    ## AddPymongoResults will inspect "_result" field, if it has
+    ## attributes like pymongo result classes (
+    ## https://pymongo.readthedocs.io/en/stable/api/pymongo/results.html
+    ## ), it will replace "_result" with the related "MatchedCount",
+    ## "InsertedCount", "UpsertedCount", "ModifiedCount" or
+    ## "DeletedCount".
+    (): ext://pymongo.watcher.filters.AddPymongoResults
   restore_original_watcher:
+    ## Python logging filters may change attributes in a log record as
+    ## described in the documentations:
+    ## https://docs.python.org/3/library/logging.html#filter-objects .
+    ## Nevertheless, if you use different handlers with different
+    ## filters, logging system will pass the same modified record to
+    ## all the handlers, thus a filter can have side effects on other
+    ## handlers as well.
+    ##
+    ## For example, RateFilter will update logs to only contain
+    ## information about the rates and it will discard other fields of
+    ## a log, but you may want to use those discarded values in other
+    ## handlers without a RateFilter.
+    ##
+    ## To overcome this problem, RateFilter will sotre the original
+    ## context information ("watch") in the log record (in a variable
+    ## named "original_watch"). RestoreOriginalWatcher filter will
+    ## restore the conext information to its original state to make
+    ## sure RateFilter used in other handlers will not affect the
+    ## handler RestoreOriginalWatcher is attached to.
+    ##
+    ## It is important to use the RestoreOriginalWatcher as the first
+    ## filter of a handler, so other filters can use the original
+    ## context information, too.
     (): ext://pymongo.watcher.filters.RestoreOriginalWatcher
   console_insert_rate:
+    ## RateFilter can be used to aggregate logs and add rates
+    ## information about the specified attributes. It will drop logs
+    ## (only the ones with the specified attributes) in every
+    ## "output_rate_sec" seconds, then pass a log with the rates
+    ## information.
+    ##
+    ## Note that RateFilter cannot be reused. So for differnet
+    ## handlers you must redifne this filter.
+    ##
+    ## Also it is important to note that the RateFilter manipulates
+    ## attributes such as timeout which are only available in a
+    ## QueueHandler with WatchQueue. So you have to add this filter
+    ## the the QueueHandler not its backend.
     (): ext://pymongo.watcher.filters.RateFilter
-    output_rate_sec: 2
-    enable_multiprocessing: false
-    ignore_intermediates: false
+    output_rate_sec: 300
+    enable_multiprocessing: true
+    ignore_intermediates: true
     attributes:
       - InsertedCount
   file_insert_rate:
+    ## Redfine the RateFiltre for file handler as it cannot be resued.
     (): ext://pymongo.watcher.filters.RateFilter
-    output_rate_sec: 2
-    enable_multiprocessing: false
-    ignore_intermediates: false
+    output_rate_sec: 3600
+    enable_multiprocessing: true
+    ignore_intermediates: true
     attributes:
       - InsertedCount
 
@@ -131,11 +285,15 @@ handlers:
     (): ext://pymongo.watcher.setup_queue_handler
     backend: cfg://handlers.console
     enable_multiprocessing: true
-    # To make sure QueueHandler will retrieve all the information from
-    # the watchers you have to set it to the lowest level for emitted
-    # logs. It will clear the undesired initial logs for the next handler
-    # (backend) itself.
+    ## To make sure QueueHandler will retrieve all the information
+    ## from the watchers you have to set it to the lowest level for
+    ## emitted logs. It will clear the undesired initial logs for the
+    ## next handler (backend) itself.
     level: DEBUG
+    ## We must add console_insert_rate to the QueueHandler, not its
+    ## backend handler. But it is also a good practice to add all the
+    ## filters to the QueueHandler as it is usually better for
+    ## performance.
     filters:
       - restore_original_watcher
       - results
@@ -166,10 +324,10 @@ handlers:
 
 loggers:
   pymongo.watcher:
-    # This is the base log level that will be handled. Here we set it
-    # to the lowest value to make sure the middle QueueHandlers will
-    # not miss any updates. Please do not change this value unless
-    # you know exactly what you are doing.
+    ## This is the base log level that will be handled. Here we set it
+    ## to the lowest value to make sure the middle QueueHandlers will
+    ## not miss any updates. Please do not change this value unless
+    ## you know exactly what you are doing.
     level: DEBUG
 
     handlers:

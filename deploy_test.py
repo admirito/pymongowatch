@@ -33,6 +33,13 @@ def test(mongodb_url):
     client = pymongo.MongoClient(mongodb_url)
     db = client.pywatch
 
+    pymongo.watcher.WatchCursor._watch_timeout_sec = 2
+    for handler in logging.getLogger("pymongo.watcher").handlers:
+        for log_filter in handler.filters:
+            # configure output_rate_sec in RateFilter
+            if hasattr(log_filter, "output_rate_sec"):
+                log_filter.output_rate_sec = 2
+
     test_collection(db)
     test_cursor(db)
     test_rates(db)

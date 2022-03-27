@@ -162,32 +162,14 @@ class WatchCursor(BaseWatcher, pymongo.cursor.Cursor):
          - add_globals (optional): A boolean indicating weather to
            load the "global" section or not.
         """
-        super().watch_dictConfig(config, add_globals=add_globals)
+        super().watch_dictConfig(config, sub_section="cursor",
+                                 add_globals=add_globals)
 
         _cursor = config.get("watchers", {}).get("cursor", {})
-
-        with contextlib.suppress(Exception):
-            cls._watch_timeout_sec = int(_cursor["timeout_sec"])
-
-        log_level = _cursor.get("log_level", {})
-        levels = cls._watch_configurtor.configure_watch_log_level(log_level)
-        for log_type in ["first", "update", "final", "timeout"]:
-            with contextlib.suppress(KeyError):
-                setattr(cls, f"_watch_log_level_{log_type}", levels[log_type])
 
         with contextlib.suppress(KeyError):
             cls.watch_emit_on_new_retrieves = \
                 _cursor["emit_on_new_retrieves"]
-
-        try:
-            default_fields = tuple(key for key in
-                                   _cursor.get("default_fields", [])
-                                   if key in cls.watch_all_fields)
-        except Exception:
-            default_fields = ()
-
-        if default_fields:
-            cls.watch_default_fields = default_fields
 
     @classmethod
     def watch_patch_pymongo(cls):
