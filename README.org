@@ -179,7 +179,9 @@ Note that using =add_logging_handlers= has not only the advantage of
 simplicity for adding formatters, but also take care of automatically
 adding an extra [[https://docs.python.org/3/library/logging.handlers.html#queuehandler][logging.handlers.QueueHandler]] and
 [[https://docs.python.org/3/library/logging.handlers.html#queuelistener][logging.handlers.QueueListener]] for each handler to overcome some log
-mutation issues we discuss later.
+mutation issues we discuss later. It will also add a couple of
+customized [[https://docs.python.org/3/library/logging.html#filter-objects][filters]] to the =QueueHandler= that are necessary to fully
+take advantage of =pymongowatch=.
 
 You can set the log format by using [[https://docs.python.org/3/library/logging.html#formatter-objects][formatters]] either by passing a
 string as the =formatter= option to the =add_logging_handlers= or by
@@ -191,9 +193,17 @@ e.g. =watch.Query= or =watch.Collection= other styles such as =%= and
 
 Another useful feature of Python =logging= module is its [[https://docs.python.org/3/library/logging.html#filter-objects][filters]]. You
 can use =filter= objects not only to filter unwanted logs but also to
-modify the ones that you want.
+modify the ones that you want. =add_logging_handlers= will
+automatically add some basic filters (such as =AddPymongoResults=
+which will extract information about =pymongo= operations results and
+add them to the related log), but you can also add your own filters.
 
-You can develop your own logging filters by sub-classing
+=pymongo.watcher.filters= module implements a couple of useful
+configurable filters such as =ExpressionFilter=, =ExecuteFilter= and
+=RateFilter=. The [[./etc/pymongowatch.yaml][etc/pymongowatch.yaml]] has some examples on how to
+use them.
+
+You can also develop your own logging filters by sub-classing
 [[https://docs.python.org/3/library/logging.html#filter-objects][logging.Filter]] as usual and access the =record.watch= in [[https://docs.python.org/3/library/logging.html#logging.Filter.filter][filter]] method
 for investigating or modifying the watcher attributes such as =DB=,
 =Collection=, =Query=, etc.
@@ -452,7 +462,8 @@ reviewed briefly.
 #+TODO: TODO(t) DOING(i) | DONE(d)
 
 *** DONE Support queries with find
-*** TODO Support for basic collection operations [[https://github.com/admirito/pymongowatch/issues/3][#3]]
+*** DONE Support for basic collection operations [[https://github.com/admirito/pymongowatch/issues/3][#3]]
+*** TODO Support for CommandCursor [[https://github.com/admirito/pymongowatch/issues/4][#4]]
 *** DONE Packaging
 **** DONE Implement pip package
 **** DONE Implement debian package
