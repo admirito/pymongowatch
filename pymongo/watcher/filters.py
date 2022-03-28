@@ -280,7 +280,7 @@ class RateFilter(logging.Filter):
     def __init__(self, name="", attributes=None, output_rate_sec=60,
                  suffix="/s", ignore_nones=True, ignore_intermediates=True,
                  drop_records=False, clone_watch=True,
-                 enable_multiprocessing=False):
+                 extra_timeout_sec=None, enable_multiprocessing=False):
         """
         Initialize a RateFilter. All the arguments are optional, but
         wihtout `attributes`, the filter will do nothing more than the
@@ -291,6 +291,19 @@ class RateFilter(logging.Filter):
 
         It will manipulate the "WatchID" and "Iterator" of the logs to
         aggregate the related logs.
+
+        If `drop_records` is False (the default) the logs before a
+        `output_rate_sec` will be unfinalized (due to the "Iteration"
+        manipulation) but they could be timed out and make their way
+        to the output if a new log will not come in
+        time. `extra_timeout_sec` will specify how much time ahead of
+        a `output_rate_sec` period should this happen.
+
+        If `extra_timeout_sec` is None (the default), its value will
+        be set to half of the `output_rate_sec`. Low amounts for
+        `extra_timeout_sec` may clutter the output with redundant logs
+        (A timeout may just happen seconds before a new finalized log
+        arrive)
 
         :Parameters:
          - `name`: passed to :class:`logging.Filter` initializer
@@ -311,6 +324,9 @@ class RateFilter(logging.Filter):
            set the timeout of the records
          - `clone_watch`: clone the watch message and store the
            original for :class:`RestoreOriginalWatcher` Filter
+         - `extra_timeout_sec`: After this amount of seconds ahead of
+           a `output_rate_sec` period, the emiited rate record will be
+           timed out
          - `enable_multiprocessing`: Use a :mod:`multiprocessing`
            manager to store rate informations.
         """
@@ -322,6 +338,9 @@ class RateFilter(logging.Filter):
         self.ignore_intermediates = ignore_intermediates
         self.drop_records = drop_records
         self.clone_watch = clone_watch
+
+        self.extra_timeout_sec = extra_timeout_sec \
+            if extra_timeout_sec is not None else int(output_rate_sec / 2)
 
         if enable_multiprocessing:
             if self.__class__.manager is None:
@@ -404,6 +423,12 @@ class RateFilter(logging.Filter):
             # them.
             record.watch["WatchID"] = self._namespace.watch_id
 
+        # We are going to manipulate "Iteration", so the "final" sate
+        # will be modified too. So we have to store the final state
+        # somewhere, so we can later know if the watch message was
+        # finalized or not.
+        was_final = record.watch.final
+
         self._namespace.iteration += 1
         record.watch["Iteration"] = self._namespace.iteration
 
@@ -426,7 +451,7 @@ class RateFilter(logging.Filter):
             self.__reset_namespace(now)
             self._intermediate_records.clear()
         else:
-            if self.drop_records or not record.watch.final:
+            if self.drop_records or not was_final:
                 # We have to drop non-final records anyway, because an
                 # operation may start before "output_rate_sec" and
                 # finish after it. So we have to use different
@@ -435,8 +460,7 @@ class RateFilter(logging.Filter):
                 result = False
             else:
                 record.watch.set_timeout(
-                    self.output_rate_sec
-                    if self._namespace.last_output_time < 0 else
+                    self.extra_timeout_sec +
                     self.output_rate_sec - (now -
                                             self._namespace.last_output_time)
                 )
