@@ -353,6 +353,7 @@ class OperationWatcher(BaseWatcher):
     def _after_operation(
             self,
             message,
+            operation_defined_arguments,
             result_field,
             result):
         """
@@ -361,6 +362,8 @@ class OperationWatcher(BaseWatcher):
         Parameters:
          - `message`: the :class:`pymongo.watcher.logger.WatchMessage`
            instance of the log
+         - `operation_defined_arguments`: a :class:`dict` with the
+           arguments specifications for the ongoing operation.
          - `result_field`: a :class:`OperationField` to specify the
            result key (and its cast, etc.)
          - `result`: the real value of the result of the operation
@@ -376,6 +379,23 @@ class OperationWatcher(BaseWatcher):
         if result_field.cast:
             with contextlib.suppress(Exception):
                 result_value = result_field.cast(result)
+
+        if result_field.to and result_field.to in operation_defined_arguments:
+            # If the result key is redfined in the defined arguments,
+            # we have to do, all we have done again according to the
+            # new spec. For example we may have to run "cast" once for
+            # the global definiation of the result (in result_field
+            # input argument of the method) and once again for its
+            # redefinition in operation_defined_arguments.
+            old_key = result_field.to
+            result_field = operation_defined_arguments[old_key]
+
+            if result_field.to is Unset:
+                result_field = dataclasses.replace(result_field, to=old_key)
+
+            if result_field.cast:
+                with contextlib.suppress(Exception):
+                    result_value = result_field.cast(result)
 
         if result_field.to:
             message[result_field.to] = result_value
@@ -442,6 +462,7 @@ class OperationWatcher(BaseWatcher):
 
             self._after_operation(
                 message=message,
+                operation_defined_arguments=operation_defined_arguments,
                 result_field=self.watch_operation_result,
                 result=result,
             )

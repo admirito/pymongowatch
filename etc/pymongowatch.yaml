@@ -62,8 +62,8 @@ watchers:
     log_level:
       final: INFO
 
-    ## The following sections defines fields for each operation. Each
-    ## definition can contain three keys.
+    ## The following sections can be used to define fields for each
+    ## operation. Each definition can contain three keys.
     ##
     ## "to" specifies the field name and if omitted it defaults to the
     ## argument name of the operation or "(result)" for the operation
@@ -82,8 +82,7 @@ watchers:
     ## to be stored in the logs as fields. The "_result" (which is
     ## specified in the "result" section) could also be used to
     ## customize the operation result in the log.
-    ##
-    # operations:
+    operations:
     #   aggregate:
     #     pipeline:
     #       to: Filter
@@ -140,6 +139,22 @@ watchers:
     #   update_one:
     #     filter:
     #       to: Filter
+    ## Above collection operations are enabled by default but you can
+    ## add new operations too. Here are some examples for the
+    ## deprecated opertions in the old versions of pymongo:
+      count:
+        filter:
+          to: Filter
+        _result:
+          to: MatchedCount
+      ## The remove deprecated operation also requires a helper
+      ## filter. Look at the fix_deprecated_remove_results filter in the
+      ## filters section.
+      remove:
+        spec_or_id:
+          to: Filter
+        _result:
+          to: _deprecated_remove
 
     ## The result of each operation can be stored in the desired key
     ## defined in "to", although "AddPymongoResults" filter will
@@ -218,6 +233,13 @@ filters:
           "x" * len(d) if isinstance(d, str) else
           0 if isinstance(d, _numbers.Number) else None)
       Filter = _mask(Filter)
+  fix_deprecated_remove_results:
+    ## If you enabled the example deprecated remove operation above,
+    ## you might as well want to enable this filter for your handler,
+    ## so the remove result will be stored in the right field.
+    (): ext://pymongo.watcher.filters.ExecuteFilter
+    execute: |
+      DeletedCount = _deprecated_remove["n"]
   console_insert_rate:
     ## RateFilter can be used to aggregate logs and add rates
     ## information about the specified attributes. It will drop logs
@@ -262,6 +284,7 @@ handlers:
     ## filters to the QueueHandler as it is usually better for
     ## performance.
     filters:
+      # - fix_deprecated_remove_results
       - console_insert_rate
       - slow
   console:
@@ -275,6 +298,7 @@ handlers:
     enable_multiprocessing: true
     level: DEBUG
     filters:
+      # - fix_deprecated_remove_results
       - file_insert_rate
       - mask
   file:
