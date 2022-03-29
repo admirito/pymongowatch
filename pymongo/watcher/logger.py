@@ -45,6 +45,27 @@ def _repr(s):
     return "'" + repr(f'"{s}')[2:]
 
 
+def generate_time_id_tuple(oid=None):
+    """
+    """
+    now = datetime.now()
+    try:
+        oid = bson.ObjectId(oid)
+    except Exception:
+        return now, oid
+
+    # bson ObjectId generation_time is in UTC which we will
+    # convert to local timezone and then remove tzinfo to have
+    # an offset-naive datetime
+    dt = oid.generation_time.astimezone(tz=None).replace(tzinfo=None)
+
+    diff = (now - dt).total_seconds()
+    if diff < 1:
+        dt = dt.replace(microsecond=int(diff * 1000000))
+
+    return dt, str(oid)
+
+
 class WatchMessage(dict):
     """
     An extended :class:`dict` to be used as the log message in
@@ -79,7 +100,7 @@ class WatchMessage(dict):
 
          - WatchID: A unqiue ID from bson.ObjectId()
          - Iteration: 0
-         - CreateTime: current datetime
+         - StartTime: current datetime
         """
         now = datetime.now()
 
@@ -92,7 +113,7 @@ class WatchMessage(dict):
         super().__init__(
             {"WatchID": None,
              "Iteration": 0,
-             "CreateTime": None,
+             "StartTime": None,
              **dict(*args, **kwargs)})
 
         # Initialize the instance attributes
@@ -108,28 +129,12 @@ class WatchMessage(dict):
                             "default_key_value_separator"]:
                     setattr(self, key, getattr(arg, key))
 
-        create_time = None
+        if self["WatchID"] is None or self["StartTime"] is None:
+            start_time, self["WatchID"] = \
+                generate_time_id_tuple(self["WatchID"])
 
-        if self["WatchID"] is None:
-            _id = bson.ObjectId()
-            self["WatchID"] = str(_id)
-            # bson ObjectId generation_time is in UTC which we will
-            # convert to local timezone.
-            create_time = _id.generation_time.astimezone(tz=None)
-
-        if self["CreateTime"] is None:
-            try:
-                create_time = (
-                    create_time or
-                    bson.ObjectId(self["WatchID"]
-                                  ).generation_time.astimezone(tz=None))
-            except Exception:
-                # If all the possible methods to generate consistent
-                # CreateTime compatible with WatchID failed, we use
-                # the current time as the last resort.
-                create_time = now
-
-            self["CreateTime"] = create_time
+            if self["StartTime"] is None:
+                self["StartTime"] = start_time
 
     def set_timeout(self, seconds=None):
         """
@@ -273,7 +278,8 @@ class WatchMessage(dict):
             [self.prepare_value(self.get(col, ""), application="csv")
              for col in csv_columns] +
             [self.prepare_value(value, application="csv")
-             for key, value in self.items() if key not in csv_columns])
+             for key, value in self.items() if key not in csv_columns and
+             not key.startswith("_")])
         return result.getvalue().rstrip("\n")
 
     @classmethod
@@ -281,9 +287,9 @@ class WatchMessage(dict):
         """
         Returns a list of column names that :meth:`csv` property will use
         """
-        from .cursor import WatchCursor
-        return ("WatchID", "Iteration", "CreateTime"
-                ) + WatchCursor.watch_all_fields
+        from .collection import WatchCollection
+        return ("WatchID", "Iteration", "StartTime"
+                ) + WatchCollection.watch_all_fields
 
     def __str__(self):
         keys = self.keys() if self.default_keys is None else self.default_keys

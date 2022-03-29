@@ -38,10 +38,11 @@ formatting by :func:`add_logging_handlers` function all in once:
 import atexit
 import logging.handlers
 
+from .collection import WatchCollection
 from .cursor import WatchCursor
 from .logger import WatchQueue
 
-__version__ = "0.3.0"
+__version__ = "1.0.0"
 
 
 def dictConfig(config):
@@ -53,13 +54,15 @@ def dictConfig(config):
     :Parameters:
      - config: configuration dictionary
     """
-    WatchCursor.watch_dictConfig(config, add_globals=True)
+    WatchCollection.watch_dictConfig(config)
+    WatchCursor.watch_dictConfig(config)
 
 
 def patch_pymongo():
     """
     Monkey patch pymongo methods to use pymongowatch logging system
     """
+    WatchCollection.watch_patch_pymongo()
     WatchCursor.watch_patch_pymongo()
 
 
@@ -67,24 +70,31 @@ def unpatch_pymongo():
     """
     Undo pymongo monkey patching
     """
-    WatchCursor.watch_patch_pymongo()
+    WatchCollection.watch_unpatch_pymongo()
+    WatchCursor.watch_unpatch_pymongo()
 
 
 queue_listners = []
 
 
-def setup_queue_handler(backend, register_atexit=True, **kwargs):
+def setup_queue_handler(backend, filters=None, register_atexit=True, **kwargs):
     """
     Creates an instance of :class:`logging.handlers.QueueHandler` with
     an instance of :class:`pymongo.watcher.logger.WatchQueue`. Then it
     will create a :class:`logging.handlers.QueueListener` for the
     queue and the provided `backend` logging handler and starts it.
 
+    When `filters` is None (the default), it will automatically
+    initialize and add
+    :class:`pymongo.watcher.filters.RestoreOriginalWatcher` and
+    :class:`AddPymongoResults` instances to the QueueHandler.
+
     Optionally the stop method of the listner could be registered with
     :func:`atexit.register`.
 
     :Parameters:
      - `backend`: the backend logging handler
+     - `filters`: a list of filters to add to the QueueHandler
      - `register_atexit` (optional): enable registering with
        :mod:`atexit`
      - `kwargs` (optional): keyword arguments supplying any additional
@@ -94,6 +104,14 @@ def setup_queue_handler(backend, register_atexit=True, **kwargs):
 
     que = WatchQueue(**kwargs)
     queue_handler = logging.handlers.QueueHandler(que)
+
+    if filters is None:
+        from . import filters as watch_filters
+        filters = [watch_filters.RestoreOriginalWatcher(),
+                   watch_filters.AddPymongoResults()]
+
+    for _filter in filters:
+        queue_handler.addFilter(_filter)
 
     listener = logging.handlers.QueueListener(que, backend)
     listener.start()
@@ -143,10 +161,8 @@ def add_logging_handlers(
        log format
      - `with_queue` (optional): if True (the default) enable seting up
        with a :class:`logging.handlers.QueueHandler`
-     - `register_atexit` (optional): register the queue listner with
-       :mod:`atexit`
      - `kwargs` (optional): keyword arguments supplying any additional
-       options for the WatchQueue object
+       options for :func:`setup_queue_handler`
     """
     if not handlers:
         handlers = [logging.StreamHandler()]
@@ -163,7 +179,6 @@ def add_logging_handlers(
             handler.setFormatter(formatter)
 
         if with_queue:
-            handler = setup_queue_handler(
-                handler, register_atexit=register_atexit, **kwargs)
+            handler = setup_queue_handler(handler, **kwargs)
 
         logger.addHandler(handler)
