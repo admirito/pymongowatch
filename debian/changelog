@@ -1,3 +1,10 @@
+pymongowatch (1.0.0-1) focal; urgency=medium
+
+  * New upstream release.
+  * Add man pages for the installed binaries.
+
+ -- Mohammad Razavi <mrazavi64@gmail.com>  Tue, 29 Mar 2022 11:12:55 +0430
+
 pymongowatch (0.3.0-1) focal; urgency=medium
 
   * New upstream release.

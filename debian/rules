@@ -14,3 +14,26 @@ override_dh_auto_install:
 override_dh_auto_clean:
 	dh_auto_clean
 	rm -f README.rst
+
+##
+## To update the man pages you have to manually run the following
+## command in the project root directory:
+##
+##     ./debian/rules -B debian/*.1
+##
+
+debian/pymongowatch-install-mask.1:
+	help2man -N -n "pymongowatch mask installer" --version-string=$$(dpkg-parsechangelog --show-field Version | sed 's/-.*$$//') --help-option="pymongowatch_mask_installer/main.py --help" python3 -o pymongowatch-install-mask.1.tmp
+	sed -i  -e 's/python3/pymongowatch-install-mask/g' -e 's/PYTHON3/PYMONGOWATCH-INSTALL-MASK/g' pymongowatch-install-mask.1.tmp
+	mv pymongowatch-install-mask.1.tmp debian/pymongowatch-install-mask.1
+
+debian/pymongowatch-csv.1:
+	help2man -N -n "pymongowatch csv utility" --version-string=$$(dpkg-parsechangelog --show-field Version | sed 's/-.*$$//') --help-option="pymongo/watcher/csv_utils.py --help" python3 -o pymongowatch-csv.1.tmp
+	sed -i  -e 's/python3/pymongowatch-csv/g' -e 's/PYTHON3/PYMONGOWATCH-CSV/g' pymongowatch-csv.1.tmp
+	mv pymongowatch-csv.1.tmp debian/pymongowatch-csv.1
+
+debian/pymongowatch-csv-aggr.1:
+	help2man -N -n "pymongowatch csv utility - aggregation" --version-string=$$(dpkg-parsechangelog --show-field Version | sed 's/-.*$$//') --help-option="pymongo/watcher/csv_utils.py aggr --help" python3 -o pymongowatch-csv-aggr.1.tmp
+	sed -i  -e 's/python3/pymongowatch-csv-aggr/g' -e 's/PYTHON3/PYMONGOWATCH-CSV-AGGR/g' pymongowatch-csv-aggr.1.tmp
+	mv pymongowatch-csv-aggr.1.tmp debian/pymongowatch-csv-aggr.1
+

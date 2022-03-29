@@ -1,11 +1,11 @@
 --- a/etc/pymongowatch.yaml
 +++ b/etc/pymongowatch.yaml
-@@ -57,7 +57,7 @@
+@@ -307,7 +307,7 @@
      formatter: csv
      maxBytes: 104857600
      backupCount: 2
 -    filename: /tmp/watch.log
 +    filename: /var/log/pymongowatch.log
-     filters:
-       - mask
  
+ loggers:
+   pymongo.watcher:

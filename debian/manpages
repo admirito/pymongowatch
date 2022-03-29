@@ -1,0 +1,3 @@
+debian/pymongowatch-install-mask.1
+debian/pymongowatch-csv.1
+debian/pymongowatch-csv-aggr.1
